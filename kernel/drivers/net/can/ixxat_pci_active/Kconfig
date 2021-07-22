@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config CAN_IXXAT_PCI_ACTIVE
+	depends on PCI
+	default m
+	tristate "IXXAT active PCI CAN/CAN FD interfaces"
+	help
+	  This driver adds support for the IXXAT PCI CAN/CAN FD interfaces.
+
+	  The driver provides support for the following devices:
+	    - IXXAT CAN-IB200 (CAN)
+	    - IXXAT CAN-IB210 (CAN)
+	    - IXXAT CAN-IB230 (CAN)
+	    - IXXAT CAN-IB400 (CAN)
+	    - IXXAT CAN-IB410 (CAN)
+	    - IXXAT CAN-IB600 (CAN FD)
+	    - IXXAT CAN-IB610 (CAN FD)
+	    - IXXAT CAN-IB640 (CAN FD)
+	    - IXXAT CAN-IB800 (CAN FD)
+	    - IXXAT CAN-IB810 (CAN FD)
