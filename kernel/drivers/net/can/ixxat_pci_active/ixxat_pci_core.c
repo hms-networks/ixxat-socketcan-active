@@ -22,10 +22,12 @@
 
 #include "ixxat_pci_core.h"
 
+#include "ixxat_kernel_adapt.h"
+
 MODULE_AUTHOR("HMS Technology Center Ravensburg Gmbh <socketcan@hms-networks.de>");
 MODULE_DESCRIPTION("SocketCAN driver for HMS Ixxat IB2xx, IB4xx, IB6xx, IB810 boards");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0.377-REL");
+MODULE_VERSION("2.0.492-REL");
 
 #define IX_STATISTICS_EXACT 0
 
@@ -53,64 +55,105 @@ MODULE_DEVICE_TABLE(pci, ixxat_pci_table);
 
 
 #ifdef DEBUG
-	static int Showdump ( u8 * pbdata, int length) 
-	{
-		char caDump[0x100] = "Dump: ";
-		char szBuf[10]="";
-		int i =0;
-		int j =0;
-		u16 len = 0; 
+static int showdump(void* pbdata, int length)
+{
+	char caDump[0x100] = "Dump: ";
+	char szBuf[10]="";
+	int i =0;
+	int j =0;
+	u16 len = 0;
 
-		while ( length > 0 ) {
+	while ( length > 0 ) {
 
-			len = (length > 16)? 16 : length;
-			
-			sprintf (caDump, "%i:", j);
-			for ( i =0; i< len; i++)
-			{
-				sprintf (szBuf, "%02x ", pbdata[i+j]);
-				strcat (caDump, szBuf);
-			}
-			strcat (caDump, "\n");
-			ix_trace_printk ( caDump );
+		len = (length > 16)? 16 : length;
 
-			length -= len;
-			j+=len;
+		sprintf (caDump, "%i:", j);
+		for (i =0; i < len; i++)
+		{
+			sprintf(szBuf, "%02x ", ioread8(pbdata+i+j));
+			strcat(caDump, szBuf);
 		}
+		strcat(caDump, "\n");
+		printk(caDump);
 
-		return 0;
+		length -= len;
+		j+=len;
 	}
-  
+
+	return 0;
+}
 #endif
 
-static int ixxat_pci_send_cmd(void __iomem *tx_fifo,
-			      struct ixxat_pci_dal_req *req,
-			      struct ixxat_pci_dal_res *res)
+static int copy_todev(void* pDest, void* pSrc, int length)
 {
-	void __iomem *fifo;
+	int idx;
+	int numdw = length / sizeof(u32);
+	int restbytes = length - (numdw * sizeof(u32));
+
+	for (idx = 0; idx < numdw; idx++)
+	 	iowrite32(ioread32(pSrc + idx * sizeof(u32)), pDest + (idx * sizeof(u32)));
+	pDest += numdw * sizeof(u32);
+	pSrc += numdw * sizeof(u32);
+	for (idx = 0; idx < restbytes; idx++)
+		iowrite8(ioread8(pSrc + idx), pDest + idx);
+
+	return length;
+}
+
+static int copy_fromdev(void* pDest, void* pSrc, int length)
+{
+	int idx;
+	int numdw = length / sizeof(u32);
+	int restbytes = length - (numdw * sizeof(u32));
+
+	for (idx = 0; idx < numdw; idx++)
+	 	iowrite32(ioread32(pSrc + (idx * sizeof(u32))), pDest + (idx * sizeof(u32)));
+	pDest += numdw * sizeof(u32);
+	pSrc += numdw * sizeof(u32);
+	for (idx = 0; idx < restbytes; idx++)
+		*((u8*)pDest + idx) = ioread8(pSrc + idx);
+
+	return length;
+}
+
+static int ixxat_pci_send_cmd(struct ixxat_pci_interface *intf,
+				  void __iomem *tx_fifo,
+				  struct ixxat_pci_dal_req *req,
+				  struct ixxat_pci_dal_res *res)
+{
+	void __iomem *data;
 	u32 write_index = ioread32(tx_fifo + IXXAT_PCI_RES_WRITE_IDX);
+	u32 read_index = ioread32(tx_fifo + IXXAT_PCI_RES_READ_IDX);
 	u32 obj_size = ioread32(tx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
+	u32 num_obj = ioread32(tx_fifo + IXXAT_PCI_RES_NUM_OBJ);
+	u32 direction = ioread32(tx_fifo + IXXAT_PCI_RES_DIR);
 	u32 data_off = write_index * obj_size;
 	u32 size = le32_to_cpu(req->size) + sizeof(struct ixxat_pci_dal_res);
 
-	if (ioread32(tx_fifo + IXXAT_PCI_RES_WRITE_IDX) ==
-	    ioread32(tx_fifo + IXXAT_PCI_RES_READ_IDX))
+	// dev_info(&intf->pdev->dev, "txf: %px os: %x #o: %x r: %x w: %x ", tx_fifo, obj_size, num_obj, read_index, write_index);
+
+	if (write_index == read_index)
+	{
+		dev_err(&intf->pdev->dev, "Error: Send cmd no buffer: widx %u ridx %u", write_index, read_index);
 		return -ENOBUFS;
+	}
 
-	if (ioread32(tx_fifo + IXXAT_PCI_RES_DIR) != IXXAT_PCI_RESDIR_HTOD)
+	if (direction != IXXAT_PCI_RESDIR_HTOD)
+	{
+		dev_err(&intf->pdev->dev, "Error: wrong fifo direction: %u exp %u", direction, IXXAT_PCI_RESDIR_HTOD);
 		return -EBADSLT;
+	}
 
-	fifo = tx_fifo + IXXAT_PCI_RES_DATA + data_off;
-	memcpy_toio(fifo, &size, sizeof(u32));
+	data = tx_fifo + IXXAT_PCI_RES_DATA + data_off;
+	iowrite32(size, data);
 
-	fifo = tx_fifo + IXXAT_PCI_RES_DATA + data_off + sizeof(u32);
-	memcpy_toio(fifo, req, le32_to_cpu(req->size));
+	data += sizeof(u32);
+	copy_todev(data, req, le32_to_cpu(req->size));
 
-	fifo = fifo + le32_to_cpu(req->size);
-	memcpy_toio(fifo, res, sizeof(struct ixxat_pci_dal_res));
+	data += le32_to_cpu(req->size);
+	copy_todev(data, res, sizeof(struct ixxat_pci_dal_res));
 
-	iowrite32((write_index + 1) % ioread32(tx_fifo + IXXAT_PCI_RES_NUM_OBJ),
-		  tx_fifo + IXXAT_PCI_RES_WRITE_IDX);
+	iowrite32((write_index + 1) % num_obj, tx_fifo + IXXAT_PCI_RES_WRITE_IDX);
 
 	return 0;
 }
@@ -121,44 +164,65 @@ static int ixxat_pci_rcv_cmd(struct ixxat_pci_interface *intf,
 			     struct ixxat_pci_dal_res *res)
 {
 	void __iomem *data;
-	volatile u32 read_index  = ioread32(rx_fifo + IXXAT_PCI_RES_READ_IDX);
-	volatile u32 write_index = ioread32(rx_fifo + IXXAT_PCI_RES_WRITE_IDX);
+	volatile u32 num_obj;
+	volatile u32 obj_size;
+	volatile u32 read_index;
+	volatile u32 write_index;
 	ktime_t start, end;
-	size_t req_size = sizeof(struct ixxat_pci_dal_req);
+	size_t req_size;
 	u32 res_size;
 	u32 data_off;
 	u32 req_code;
 	u16 req_port;
 
-	if (ioread32(rx_fifo + IXXAT_PCI_RES_DIR) != IXXAT_PCI_RESDIR_DTOH)
+	// check fifo type
+	if (ioread16(rx_fifo + IXXAT_PCI_RES_DIR) != IXXAT_PCI_RESDIR_DTOH)
 		return -EBADSLT;
+
+	// read max fifo object count
+	num_obj = ioread32(rx_fifo + IXXAT_PCI_RES_NUM_OBJ);
+  
+	// read fifo object size
+	obj_size = ioread32(rx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
+
+	// get read index
+	read_index = ioread32(rx_fifo + IXXAT_PCI_RES_READ_IDX);
+
+	// get write index
+	write_index = ioread32(rx_fifo + IXXAT_PCI_RES_WRITE_IDX);
+
+	// calc request size
+	req_size = sizeof(struct ixxat_pci_dal_req);
 
 	start = ktime_get_real();
 	end = start;
 
 	while ((ktime_to_ns(end) - ktime_to_ns(start)) < IXXAT_PCI_CMD_TIMEOUT_NS) {
-		if (++read_index == ioread32(rx_fifo + IXXAT_PCI_RES_NUM_OBJ))
+		if (++read_index == num_obj)
 			read_index = 0;
 
-		if (write_index == ioread32(rx_fifo + IXXAT_PCI_RES_NUM_OBJ))
+		if (write_index == num_obj)
 			write_index = 0;
 
 		// sleep for 10 µsec and wait for data from the interface card
 		if (read_index == write_index) {
+			usleep_range(9, 10);
+
 			read_index = ioread32(rx_fifo + IXXAT_PCI_RES_READ_IDX);
 			write_index = ioread32(rx_fifo + IXXAT_PCI_RES_WRITE_IDX);
-			usleep_range(9, 10);
+
 			goto cmd_continue;
 		}
 
-		data_off = read_index * ioread32(rx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
+		data_off = read_index * obj_size;
 		data = rx_fifo + IXXAT_PCI_RES_DATA + data_off;
-		iowrite32(read_index, rx_fifo + IXXAT_PCI_RES_READ_IDX);
 
 		res_size = ioread32(data);
 
 		if (res_size != (le32_to_cpu(res->res_size) + req_size)) {
-			dev_err(&intf->pdev->dev, "Error: Invalid cmd size!");
+			// incorrect answer
+			dev_err(&intf->pdev->dev, "Error: Invalid cmd size %d %d %d", res_size, (u32)(res->res_size + req_size), (u32)(le32_to_cpu(res->res_size) + req_size));
+
 			goto cmd_continue;
 		}
 
@@ -177,16 +241,18 @@ static int ixxat_pci_rcv_cmd(struct ixxat_pci_interface *intf,
 			goto cmd_continue;
 		}
 
-		memcpy_fromio(res, data + sizeof(u32) + req_size,
-			      le32_to_cpu(res->res_size));
+		copy_fromdev(res, data + sizeof(u32) + req_size, le32_to_cpu(res->res_size));
 
-		ix_trace_printk ("Req:%x ResSize %i, RetSize %i, Retcode %i \n", 
+		ix_trace_printk ("Req:%x ResSize %i, RetSize %i, Retcode %i \n",
 			req->code,
 			res->res_size, res->ret_size, res->ret_code);
-		if (res->ret_code) 
+		if (res->ret_code)
 			dev_err(&intf->pdev->dev,
 				"Error %x: Receiving command failure",
 				res->ret_code);
+
+    	// increment read index
+		iowrite32(read_index, rx_fifo + IXXAT_PCI_RES_READ_IDX);
 
 		return le32_to_cpu(res->ret_code);
 
@@ -223,9 +289,9 @@ int ixxat_pci_handle_cmd(struct ixxat_pci_interface *intf,
 {
 	int err;
 
-	err = ixxat_pci_send_cmd(intf->cmd_tx_fifo, req, res);
+	err = ixxat_pci_send_cmd(intf, intf->cmd_tx_fifo, req, res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Send cmd failed", err);
+		dev_err(&intf->pdev->dev, "Error %x: Send cmd %x failed", err, req->code);
 		goto fail;
 	}
 
@@ -276,10 +342,12 @@ static int ixxat_pci_int_ena_req(struct ixxat_pci_interface *intf,
 				 u8 mode, u32 IntlCtrlMask)
 {
 	volatile u32 regval = ioread32(intf->reg1vadd + PCIE_ALTERALCR_A2P_INTENA);
-	volatile u32 intSR  = ioread32(intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
 	volatile u32 dest   = 0;
+#if defined(CONFIG_TRACING) && defined(DEBUG)
+	volatile u32 intSR  = ioread32(intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
+#endif
 
-	ix_trace_printk (">> ixxat_pci_int_ena_req mask %x, mode %i \n", IntlCtrlMask, mode);	
+	ix_trace_printk (">> ixxat_pci_int_ena_req mask %x, mode %i \n", IntlCtrlMask, mode);
 
 	switch (mode) {
 		case 0: // disable mask
@@ -289,15 +357,17 @@ static int ixxat_pci_int_ena_req(struct ixxat_pci_interface *intf,
 			dest = regval | IntlCtrlMask;
 			break;
 		default:
-		case 0xFF: 
+		case 0xFF:
 			dest = IntlCtrlMask;
 			break;
 	}
 
 	iowrite32(dest, intf->reg1vadd + PCIE_ALTERALCR_A2P_INTENA);
 
-	ix_trace_printk ("<< ixxat_pci_int_ena_req ena %x (%x) , sr:%x\n", 
-			regval, dest, intSR);			  
+#if defined(CONFIG_TRACING) && defined(DEBUG)
+	ix_trace_printk ("<< ixxat_pci_int_ena_req ena %x (%x) , sr:%x\n",
+			regval, dest, intSR);
+#endif
 
 	return (0 != (regval & IntlCtrlMask));
 }
@@ -305,7 +375,6 @@ static int ixxat_pci_int_ena_req(struct ixxat_pci_interface *intf,
 static void ixxat_pci_int_clr_req(struct ixxat_pci_interface *intf,
                   u32 regval)
 {
-//	u32 regval = ioread32(intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
 	iowrite32(regval, intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
 }
 
@@ -319,19 +388,19 @@ static int ixxat_pci_int_get_stat(struct ixxat_pci_interface *intf)
 static irqreturn_t ixxat_pci_irq_handler(int irq, void *dev_id)
 {
 	u8 enable;
-	u32 intCtrlMask;			
+	u32 intCtrlMask;
 
 	struct ixxat_pci_device *dev;
 	struct ixxat_pci_interface *intf = (struct ixxat_pci_interface *)dev_id;
 
-	// is a Interrupt from act ctrl available 
+	// is a Interrupt from act ctrl available
 	volatile u32 intSR   = ixxat_pci_int_get_stat(intf);
 	if (0 == (intSR & IXXAT_PCI_ENABLE_INT))
 		return IRQ_NONE;
 
-	ix_trace_printk (">> ixxat_pci_irq_handler stat %x \n", intSR);			
-	
-	// disable all interrupts! 
+	ix_trace_printk (">> ixxat_pci_irq_handler stat %x \n", intSR);
+
+	// disable all interrupts!
 	enable = ixxat_pci_int_ena_req(intf, 0, IXXAT_PCI_ENABLE_INT);
 	ixxat_pci_int_clr_req(intf, intSR);
 /*
@@ -339,26 +408,26 @@ static irqreturn_t ixxat_pci_irq_handler(int irq, void *dev_id)
 		enable = ixxat_pci_int_ena_req(intf, 1, intCtrlMask);
 		return IRQ_HANDLED;
 	}
-*/	
+*/
 
 	for (dev = intf->dev; dev; dev = dev->next_dev) {
 		if (!(dev->state & IXXAT_PCI_STATE_RUNNING))
 			continue;
 
-		intCtrlMask =(1 << (dev->ctrl_idx +1 + 16));			
+		intCtrlMask =(1 << (dev->ctrl_idx +1 + 16));
 
 		if ( intSR & intCtrlMask) {
 			dev->intf->handle_data |= (1 << dev->ctrl_idx);
 			napi_schedule(&dev->napi);
 		}
 		else {
-			ixxat_pci_int_ena_req(intf, 1, intCtrlMask);	
+			ixxat_pci_int_ena_req(intf, 1, intCtrlMask);
 		}
 	}
 
 //	if ((intf->handle_data & intf->started_mask) != intf->started_mask)
 //		ixxat_pci_int_ena_req(intf, 1, intCtrlMask);
-	ix_trace_printk ("<< ixxat_pci_irq_handler \n");			
+	ix_trace_printk ("<< ixxat_pci_irq_handler \n");
 
 	return IRQ_HANDLED;
 }
@@ -399,8 +468,6 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 
 	ix_trace_printk (">> ixxat_pci_register_dev \n");
 
-	pci_set_master(pdev);
-
 	intf->dev = NULL;
 
 	intf->reg1add = pci_resource_start(pdev, 0);
@@ -409,14 +476,12 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 	intf->memadd = pci_resource_start(pdev, 2);
 	intf->memlen = pci_resource_len(pdev, 2);
 
-	request_mem_region(intf->reg1add, intf->reg1len, "IXXAT PCI Registers");
 	intf->reg1vadd = ioremap(intf->reg1add, intf->reg1len);
 	if (!intf->reg1vadd) {
 		dev_err(&pdev->dev, "Error: reg1vadd ioremap_nocache failed\n");
 		goto release_reg1;
 	}
 
-	request_mem_region(intf->memadd, intf->memlen, "IXXAT PCI Memory");
 	intf->memvadd = ioremap(intf->memadd, intf->memlen);
 	if (!intf->memvadd) {
 		dev_err(&pdev->dev, "Error: memvadd ioremap_nocache failed\n");
@@ -425,9 +490,9 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 
 	intf->addmemlen = IXXAT_PCI_ADDMEM_LEN;
 	intf->dmalen = IXXAT_PCI_DMA_LEN;
-	
-	intf->dmavadd = pci_alloc_consistent(pdev, intf->dmalen, &intf->dmaadd);
-	
+
+    intf->dmavadd = dma_alloc_coherent( &pdev->dev, intf->dmalen, &intf->dmaadd, GFP_KERNEL|GFP_DMA);
+
 	if (!intf->dmavadd) {
 		dev_err(&pdev->dev, "Error: Allocating dmavadd failed\n");
 		goto release_dma;
@@ -453,13 +518,11 @@ release_irq:
 	pci_free_irq_vectors(intf->pdev);
 	intf->addmemvadd = NULL;
 release_addmem:
-	pci_free_consistent(pdev, intf->dmalen, intf->dmavadd, intf->dmaadd);
+    dma_free_coherent(&pdev->dev, intf->dmalen, intf->dmavadd, intf->dmaadd);
 release_dma:
 	iounmap(intf->memvadd);
-	release_mem_region(intf->memadd, intf->memlen);
 release_memreg:
 	iounmap(intf->reg1vadd);
-	release_mem_region(intf->reg1add, intf->reg1len);
 release_reg1:
 
 	ix_trace_printk ("<< ixxat_pci_register_dev \n");
@@ -581,17 +644,17 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 		hdr = (struct ixxat_pci_fwHdr *) (fw->data);
 		ix_trace_printk ("%s, typ:%i, maxlen %i\n", hdr->caIdent, hdr->type, hdr->maxlen );
 		pFw += sizeof (struct ixxat_pci_fwHdr);
-			
+
 		for (i = 0; i < fw->size;) {
 			struct ixxat_pci_fw *fwb = (struct ixxat_pci_fw *) (pFw + i);
-			u32 add = fwb->add; //be32_to_cpu(fwb->add);
-			u16 len = fwb->len;//be16_to_cpu(fwb->len);
+			u32 addr = le32_to_cpu(fwb->address);
+			u16 len = le16_to_cpu(fwb->length);
 			u8 *data = fwb->data;
-			
-			if ((add==0)&&(len==0))
+
+			if ((addr==0)&&(len==0))
 				break;
 
-			ix_trace_printk ("adr %08x, len:%04x, data %02x %02x \n", add, len, data[0], data[1] );
+			ix_trace_printk ("adr %08x, len:%04x, data %02x %02x \n", addr, len, data[0], data[1] );
 
 			req_size = len + sizeof(req->dal_req)
 					+ sizeof(req->addr);
@@ -604,7 +667,7 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 
 			ixxat_pci_setup_cmd(&req->dal_req, req_size,
 						&res->dal_res, res_size, req_code);
-			req->addr = cpu_to_le32(add);
+			req->addr = cpu_to_le32(addr);
 
 			if (req_size > IXXAT_PCI_CMD_MAX_SIZE) {
 				err = -ENOBUFS;
@@ -637,9 +700,7 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 			req = NULL;
 			mutex_unlock(&intf->cmd_lock);
 
-//			i = i + sizeof(add) + sizeof(len) + len + sizeof(reserved);
-//			i = i + sizeof(add) + sizeof(len) + len;
-			i = i + sizeof(add) + sizeof(len) + hdr->maxlen;
+			i = i + sizeof(addr) + sizeof(len) + le32_to_cpu(hdr->maxlen);
 
 			if ( ++ loopCnt > 10000 ) {
 				ix_trace_printk ("leave Fw download Pos:%i, size:%li \n", i, fw->size);
@@ -1009,8 +1070,7 @@ static int ixxat_pci_handle_status(struct ixxat_pci_device *dev,
 			tmp_read = 1;
 
 		if (tmp_read != dev->frn_write) {
-			can_free_echo_skb(dev->netdev,
-					  dev->frn_read - 1);
+			can_free_echo_skb(dev->netdev, dev->frn_read - 1, NULL);
 			dev->frn_read = tmp_read;
 		}
 		spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
@@ -1042,18 +1102,18 @@ static int ixxat_pci_handle_vci_msg(struct ixxat_pci_device *dev, void *data)
 	switch (msg_type) {
 	case IXXAT_PCI_CAN_STATUS:
 		ret = ixxat_pci_handle_status(dev, can_msg);
-		ix_trace_printk ("-- ixxat_pci_handle_status %i\n", ret);		
+		ix_trace_printk ("-- ixxat_pci_handle_status %i\n", ret);
 		break;
 
 	case IXXAT_PCI_CAN_ERROR:
 		ret = ixxat_pci_handle_error(dev, can_msg);
-		ix_trace_printk ("-- ixxat_pci_handle_error %i\n", ret);		
+		ix_trace_printk ("-- ixxat_pci_handle_error %i\n", ret);
 		break;
 
 	case IXXAT_PCI_CAN_INFO:
 	case IXXAT_PCI_CAN_WAKEUP:
 	case IXXAT_PCI_CAN_TIMERST:
-		ix_trace_printk ("-- other %i\n", ret);		
+		ix_trace_printk ("-- other %i\n", ret);
 		ret = 1;
 		break;
 	default:
@@ -1066,7 +1126,7 @@ static int ixxat_pci_handle_vci_msg(struct ixxat_pci_device *dev, void *data)
 	if (ret < 0)
 		netdev_err(dev->netdev, "Error %d: VCI-handling failed\n", ret);
 
-	ix_trace_printk ("<< ixxat_pci_handle_vci_msg %i\n", ret);		
+	ix_trace_printk ("<< ixxat_pci_handle_vci_msg %i\n", ret);
 
 	return ret;
 }
@@ -1091,12 +1151,12 @@ static int ixxat_pci_handle_devmsg(struct ixxat_pci_device *dev)
 		msg_type = *(u32 *)(ifi_base);
 		ifi_base += sizeof(u32);
 
-		ix_trace_printk ("-- message read %i,write %i, type %i \n", read_index, write_index, msg_type);	
+		ix_trace_printk ("-- message read %i,write %i, type %i \n", read_index, write_index, msg_type);
 
 		switch (msg_type) {
 		case IXXAT_PCI_MSG_TYPE_IFI:
 			ret = dev->adapter->handle_msg(dev, ifi_base);
-			
+
 			break;
 		case IXXAT_PCI_MSG_TYPE_VCI:
 			ret = ixxat_pci_handle_vci_msg(dev, ifi_base);
@@ -1114,7 +1174,7 @@ static int ixxat_pci_handle_devmsg(struct ixxat_pci_device *dev)
 			*(u32 *)(fifo + IXXAT_PCI_RES_READ_IDX) += 1;
 	}
 	else {
-		ix_trace_printk ("-- no message read %i, write %i \n", read_index, write_index);	
+		ix_trace_printk ("-- no message read %i, write %i \n", read_index, write_index);
 	}
 
 	ix_trace_printk ("<< ixxat_pci_handle_devmsg %i \n", ret);
@@ -1134,10 +1194,10 @@ static int ixxat_pci_napi_rx_poll(struct napi_struct *napi, int quota)
 	u32 intCtrlMask = 0;
 	u32 loopExit = 0;
 
-	ix_trace_printk (">> %i) ixxat_pci_napi_rx_poll \n", dev->ctrl_idx);	
+	ix_trace_printk (">> %i) ixxat_pci_napi_rx_poll \n", dev->ctrl_idx);
 
 	while ((nxpackets < quota)&&(0 == loopExit)) {
-		
+
 		rx_fifo = dev->rx_fifo;
 		read_index = (*(u32 *)(rx_fifo + IXXAT_PCI_RES_READ_IDX)) + 1;
 		if (read_index == *(u32 *)(rx_fifo + IXXAT_PCI_RES_NUM_OBJ))
@@ -1146,7 +1206,7 @@ static int ixxat_pci_napi_rx_poll(struct napi_struct *napi, int quota)
 		write_index = *(u32 *)(rx_fifo + IXXAT_PCI_RES_WRITE_IDX);
 
 		if (read_index == write_index ||
-		    !(dev->intf->started_mask & (0x01 << dev->ctrl_idx))) 
+		    !(dev->intf->started_mask & (0x01 << dev->ctrl_idx)))
 				loopExit = 1;
 
 		if (ixxat_pci_handle_devmsg(dev) > 0)
@@ -1154,7 +1214,7 @@ static int ixxat_pci_napi_rx_poll(struct napi_struct *napi, int quota)
 		else
 			loopExit = 2;
 
-		ix_trace_printk ("  loop %i / %i (Exit %i) \n", nxpackets, quota, loopExit);				
+		ix_trace_printk ("  loop %i / %i (Exit %i) \n", nxpackets, quota, loopExit);
 	}
 
 
@@ -1180,7 +1240,7 @@ static int ixxat_pci_napi_rx_poll(struct napi_struct *napi, int quota)
 		ixxat_pci_int_ena_req(intf, 1, intCtrlMask);
 	}
 
-	ix_trace_printk ("<< ixxat_pci_napi_rx_poll packets %i \n", nxpackets);	
+	ix_trace_printk ("<< ixxat_pci_napi_rx_poll packets %i \n", nxpackets);
 	return nxpackets;
 }
 
@@ -1257,7 +1317,104 @@ static int ixxat_pci_get_intf_info(struct ixxat_pci_interface *intf,
 		} else {
 			err = le32_to_cpu(cmd->res.ret_code);
 			if (dev_info)
-				memcpy(dev_info, &cmd->info, sizeof(cmd->info));
+			{
+				memset(dev_info, 0, sizeof(*dev_info));
+				memcpy(dev_info->intf_name, &cmd->info.intf_name, sizeof(dev_info->intf_name));
+				strncpy(dev_info->intf_id, cmd->info.intf_id, sizeof(dev_info->intf_id));
+				dev_info->intf_version = cmd->info.intf_version;
+				dev_info->intf_fpga_version = cmd->info.intf_fpga_version;
+				dev_info->reserved = 0;
+			}
+		}
+
+		kfree(cmd);
+		mutex_unlock(&intf->cmd_lock);
+	}
+
+	return err;
+}
+
+static int ixxat_pci_get_firmware_info(struct ixxat_pci_interface *intf,
+				   struct ixxat_intf_firmware_info2 *fw_info)
+{
+	int err;
+	struct ixxat_pci_fwinfo_cmd *cmd;
+	const u32 cmd_size = sizeof(*cmd);
+	const u32 req_size = sizeof(cmd->req);
+	const u32 res_size = cmd_size - req_size;
+	const u32 req_code = IXXAT_PCI_CMD_GET_FWINFO;
+
+	cmd = kmalloc(cmd_size, GFP_KERNEL);
+	if (!cmd)
+		return -ENOMEM;
+
+	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
+
+	err = mutex_lock_interruptible(&intf->cmd_lock);
+
+	if (err) {
+		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
+		kfree(cmd);
+	} else {
+		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
+		if (err) {
+			dev_err(&intf->pdev->dev, "Error %d: Get info failed\n", err);
+		} else {
+			err = le32_to_cpu(cmd->res.ret_code);
+			if (fw_info)
+			{
+				fw_info->firmware_type = cmd->info.firmware_type;
+				fw_info->reserved = 0;
+				fw_info->major_version = cmd->info.major_version;
+				fw_info->minor_version = cmd->info.minor_version;
+				fw_info->build_version = cmd->info.build_version;
+				fw_info->revision = 0;
+			}
+		}
+
+		kfree(cmd);
+		mutex_unlock(&intf->cmd_lock);
+	}
+
+	return err;
+}
+
+static int ixxat_pci_get_firmware_info2(struct ixxat_pci_interface *intf,
+				   struct ixxat_intf_firmware_info2 *fw_info)
+{
+	int err;
+	struct ixxat_pci_fwinfo2_cmd *cmd;
+	const u32 cmd_size = sizeof(*cmd);
+	const u32 req_size = sizeof(cmd->req);
+	const u32 res_size = cmd_size - req_size;
+	const u32 req_code = IXXAT_PCI_CMD_GET_FWINFO2;
+
+	cmd = kmalloc(cmd_size, GFP_KERNEL);
+	if (!cmd)
+		return -ENOMEM;
+
+	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
+
+	err = mutex_lock_interruptible(&intf->cmd_lock);
+
+	if (err) {
+		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
+		kfree(cmd);
+	} else {
+		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
+		if (err) {
+			dev_err(&intf->pdev->dev, "Error %d: Get info failed\n", err);
+		} else {
+			err = le32_to_cpu(cmd->res.ret_code);
+			if (fw_info)
+			{
+				fw_info->firmware_type = cmd->info.firmware_type;
+				fw_info->reserved = 0;
+				fw_info->major_version = cmd->info.major_version;
+				fw_info->minor_version = cmd->info.minor_version;
+				fw_info->build_version = cmd->info.build_version;
+				fw_info->revision = cmd->info.revision;
+			}
 		}
 
 		kfree(cmd);
@@ -1351,15 +1508,15 @@ static int ixxat_pci_handle_correct_frn(struct ixxat_pci_device *dev, u8 frn,
 	if (skb)
 		ixxat_pci_get_ts_tv(dev, ts, &skb->tstamp);
 
-	iSkbRet = can_get_echo_skb(dev->netdev, frn - 1);
+	iSkbRet = can_get_echo_skb(dev->netdev, frn - 1, NULL);
 
 	// is no loopback is active ?
 	if (iSkbRet) {
-		
-	} else { 
+
+	} else {
 		// it's possible that no loopback is active !
 		// if the tx packets are counted through self-reception frames !
-	}	
+	}
 
 	dev->frn_read = idx;
 	return 1;
@@ -1442,22 +1599,22 @@ static u8 determineLoopMode(bool loopback, bool global_loopback)
 	// incremented after the WriteURB returns
 	const bool statistics_exact = IX_STATISTICS_EXACT;
 
-	trace_printk ("global loopback %x \n", global_loopback);
+	ix_trace_printk ("global loopback %x \n", global_loopback);
 	// is loopback set with ip link .. loopback on
 	if (global_loopback == true) {
-		
+
 		// is loopback set with setsockopt
 		// can be changed between message transmission
-		if (loopback) 
+		if (loopback)
 			loopMode = (IX_LOOP_SELF_RX | IX_LOOPBACK);
-	} 
+	}
 
 	if ((loopMode & IX_LOOP_SELF_RX) != IX_LOOP_SELF_RX) {
 		if (statistics_exact)
 			loopMode = IX_LOOP_SELF_RX;
 	}
 
-	trace_printk ("Loopback %x \n", loopMode);
+	ix_trace_printk ("Loopback %x \n", loopMode);
 
 	return loopMode;
 }
@@ -1470,9 +1627,9 @@ static netdev_tx_t ixxat_pci_start_xmit(struct sk_buff *skb,
 	struct ixxat_pci_device *dev = netdev_priv(netdev);
 
     ix_trace_printk (">> %i) ixxat_pci_start_xmit \n", dev->ctrl_idx);
-	// check loopback 
+	// check loopback
 	loopMode = determineLoopMode((skb->pkt_type == PACKET_LOOPBACK),
-									dev->loopback);	
+									dev->loopback);
 	ret = dev->adapter->dev_start_xmit(skb, netdev, loopMode);
 	ix_trace_printk ("<< ixxat_pci_start_xmit %i \n", ret);
 
@@ -1502,7 +1659,7 @@ static int ixxat_pci_start(struct ixxat_pci_device *dev)
 			dev->loopback = true;
 		} else {
 			dev->loopback = false;
-		}			
+		}
 
 		ixxat_pci_set_ts_now(dev, time_ref);
 
@@ -1552,10 +1709,6 @@ static void ixxat_pci_free(struct ixxat_pci_device *dev)
 
 	// is it the last open dev
 	if (!dev->prev_dev && !dev->next_dev) {
-		// todo check
-//		intCtrlMask =(1 << (dev->ctrl_idx +1 + 16));
-//		ixxat_pci_int_ena_req(dev->intf, 0, intCtrlMask);
-
 		ixxat_pci_stop_ctrl(dev);
 
 		if (dev->intf->device_irq) {
@@ -1570,7 +1723,7 @@ static void ixxat_pci_free(struct ixxat_pci_device *dev)
 		dev->intf->addmemvadd = NULL;
 
 		if (dev->intf->dmavadd)
-			pci_free_consistent(dev->pdev, dev->intf->dmalen,
+			dma_free_coherent(&dev->pdev->dev, dev->intf->dmalen,
 					    dev->intf->dmavadd,
 					    dev->intf->dmaadd);
 
@@ -1584,26 +1737,94 @@ static void ixxat_pci_free(struct ixxat_pci_device *dev)
 	ix_trace_printk ("<< ixxat_pci_free \n");
 }
 
+/*
+ * sysfs attributes
+ */
+static ssize_t show_serial(struct device *pdev,
+		struct device_attribute *attr, char *buf)
+{
+	struct net_device *netdev = to_net_dev(pdev);
+	struct ixxat_pci_device *dev = netdev_priv(netdev);
+	struct ixxat_pci_interface *intf =  dev->intf;
+	return sprintf(buf, "%.*s\n", (int)(sizeof(intf->dev_info.intf_id)), intf->dev_info.intf_id);
+}
+static DEVICE_ATTR(serial, S_IRUGO, show_serial, NULL);
+
+static ssize_t show_firmware_version(struct device *pdev,
+		struct device_attribute *attr, char *buf)
+{
+	struct net_device *netdev = to_net_dev(pdev);
+	struct ixxat_pci_device *dev = netdev_priv(netdev);
+	struct ixxat_pci_interface *intf =  dev->intf;
+	return sprintf(buf, "%d.%d.%d.%d\n", intf->fw_info.major_version, intf->fw_info.minor_version, intf->fw_info.build_version, intf->fw_info.revision);
+}
+static DEVICE_ATTR(firmware_version, S_IRUGO, show_firmware_version, NULL);
+
+static ssize_t show_hardware(struct device *pdev,
+		struct device_attribute *attr, char *buf)
+{
+	struct net_device *netdev = to_net_dev(pdev);
+	struct ixxat_pci_device *dev = netdev_priv(netdev);
+	struct ixxat_pci_interface *intf =  dev->intf;
+	return sprintf(buf, "%.*s\n", (int)(sizeof(intf->dev_info.intf_name)), intf->dev_info.intf_name);
+}
+static DEVICE_ATTR(hardware, S_IRUGO, show_hardware, NULL);
+
+static ssize_t show_hardware_version(struct device *pdev,
+		struct device_attribute *attr, char *buf)
+{
+	struct net_device *netdev = to_net_dev(pdev);
+	struct ixxat_pci_device *dev = netdev_priv(netdev);
+	struct ixxat_pci_interface *intf =  dev->intf;
+	return sprintf(buf, "0x%04X\n", intf->dev_info.intf_version);
+}
+static DEVICE_ATTR(hardware_version, S_IRUGO, show_hardware_version, NULL);
+
+static ssize_t show_fpga_version(struct device *pdev,
+		struct device_attribute *attr, char *buf)
+{
+	struct net_device *netdev = to_net_dev(pdev);
+	struct ixxat_pci_device *dev = netdev_priv(netdev);
+	struct ixxat_pci_interface *intf =  dev->intf;
+	return sprintf(buf, "0x%08X\n", intf->dev_info.intf_fpga_version);
+}
+static DEVICE_ATTR(fpga_version, S_IRUGO, show_fpga_version, NULL);
+
+static struct attribute *ixxat_pdev_attrs[] = {
+	&dev_attr_serial.attr,
+	&dev_attr_firmware_version.attr,
+	&dev_attr_hardware.attr,
+	&dev_attr_hardware_version.attr,
+	&dev_attr_fpga_version.attr,
+	NULL,
+};
+
+static const struct attribute_group ixxat_pdev_group = {
+	.name = NULL,
+	.attrs = ixxat_pdev_attrs,
+};
+
 static void ixxat_pci_disconnect(struct pci_dev *pdev)
 {
 	struct ixxat_pci_device *dev;
 	struct ixxat_pci_device *prev_dev;
 
 	ix_trace_printk (">> ixxat_pci_disconnect \n");
-	
+
 	dev = pci_get_drvdata(pdev);
-	
+
 	/* unregister the given device and all previous devices */
 	while ( dev )
 	{
 		prev_dev = dev->prev_dev;
 		dev->next_dev = NULL;
-		
+
 		ixxat_pci_free(dev);
-		
+
+		sysfs_remove_group(&dev->netdev->dev.kobj, &ixxat_pdev_group);
 		unregister_netdev(dev->netdev);
 		free_candev(dev->netdev);
-		
+
 		dev = prev_dev;
 	}
 
@@ -1656,7 +1877,7 @@ static int ixxat_pci_stop(struct net_device *netdev)
 				    err);
 
 		napi_disable(&dev->napi);
-		
+
 		intCtrlMask =(1 << (dev->ctrl_idx +1 + 16));
 		ixxat_pci_int_ena_req(dev->intf, 0, intCtrlMask);
 
@@ -1749,10 +1970,10 @@ static int ixxat_init_cmdfifo ( struct ixxat_pci_interface *intf, u32 * pdwOffse
 	u32 obj_size = 0;
 	u32 obj_num = 0;
 	u32 data_off = 0;
-	
+
 	// command Tx
 	intf->cmd_tx_fifo = intf->memvadd + IXXAT_PCI_RES_VER_OFF;
-	
+
 	obj_size = ioread32(intf->cmd_tx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
 	obj_num = ioread32(intf->cmd_tx_fifo + IXXAT_PCI_RES_NUM_OBJ);
 	data_off = obj_size * obj_num;
@@ -1762,19 +1983,19 @@ static int ixxat_init_cmdfifo ( struct ixxat_pci_interface *intf, u32 * pdwOffse
 	// command Rx
 	intf->cmd_rx_fifo = intf->cmd_tx_fifo + IXXAT_PCI_RES_HEADER_SIZE + data_off;
 	obj_size = ioread32(intf->cmd_rx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
-	obj_num = ioread32(intf->cmd_rx_fifo + IXXAT_PCI_RES_NUM_OBJ);	
+	obj_num = ioread32(intf->cmd_rx_fifo + IXXAT_PCI_RES_NUM_OBJ);
 	data_off = obj_size * obj_num;
 	ix_trace_printk ("cmdFifo Rx %p, size:%i, num, %i\n", intf->cmd_rx_fifo, obj_size, obj_num);
 
 	intf->cmd_dbg_fifo = intf->cmd_rx_fifo + IXXAT_PCI_RES_HEADER_SIZE + data_off;
 	obj_size = ioread32(intf->cmd_dbg_fifo + IXXAT_PCI_RES_OBJ_SIZE);
-	obj_num = ioread32(intf->cmd_dbg_fifo + IXXAT_PCI_RES_NUM_OBJ);	
+	obj_num = ioread32(intf->cmd_dbg_fifo + IXXAT_PCI_RES_NUM_OBJ);
 	data_off = obj_size * obj_num;
-	ix_trace_printk ("dbgFifo Rx %p, size:%i, num, %i\n", intf->cmd_dbg_fifo, obj_size, obj_num);	
+	ix_trace_printk ("dbgFifo Rx %p, size:%i, num, %i\n", intf->cmd_dbg_fifo, obj_size, obj_num);
 
 	if ( pdwOffset )
 		*pdwOffset = data_off;
-	
+
 	return 0;
 }
 
@@ -1785,12 +2006,12 @@ static int ixxat_init_fwfifos ( struct ixxat_pci_interface *intf, u8 maxCtrl )
 	u32 obj_tag = 0;
 	u32 data_off = 0;
 	int ctrlNo=0;
-	u32 MemOffset;
-	
+	u32 memOffset;
+
 	ixxat_init_cmdfifo ( intf, &data_off );
-	
+
 	ctrlNo=0;
-	
+
 	while (ctrlNo < maxCtrl) {
 		if ( ctrlNo == 0) {
 			intf->tx_fifo[ctrlNo] = intf->cmd_dbg_fifo + IXXAT_PCI_RES_HEADER_SIZE + data_off;
@@ -1799,38 +2020,44 @@ static int ixxat_init_fwfifos ( struct ixxat_pci_interface *intf, u8 maxCtrl )
 			intf->tx_fifo[ctrlNo] = intf->tx_fifo[ctrlNo-1] + IXXAT_PCI_RES_HEADER_SIZE + data_off;
 		}
 
-		obj_tag = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_TAG); 
+		obj_tag = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_TAG);
 		obj_size = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_OBJ_SIZE);
-		obj_num = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_NUM_OBJ);	
-		data_off = obj_size * obj_num;	
+		obj_num = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_NUM_OBJ);
+		data_off = obj_size * obj_num;
 
-		MemOffset = intf->tx_fifo[ctrlNo] - intf->cmd_dbg_fifo;
-		ix_trace_printk ("%08x Fifo %i Tx %p (%i), size:%i, num, %i\n", obj_tag, ctrlNo, intf->tx_fifo[ctrlNo], MemOffset, obj_size, obj_num);
+		if (IXXAT_PCI_PCRFIFO_RES_TAG != obj_tag)
+			dev_err(&intf->pdev->dev, "Error: Unexpected tx fifo[%d] resource tag: %x expected: %x", ctrlNo, obj_tag, IXXAT_PCI_PCRFIFO_RES_TAG);
+
+		memOffset = intf->tx_fifo[ctrlNo] - intf->cmd_dbg_fifo;
+		ix_trace_printk ("%08x Fifo %i Tx %p (%i), size:%i, num, %i\n", obj_tag, ctrlNo, intf->tx_fifo[ctrlNo], memOffset, obj_size, obj_num);
 		++ctrlNo;
 	}
-	
-	
+
+
 	ctrlNo=0;
 	data_off=0;
 
 	while (ctrlNo < maxCtrl) {
-		if ( ctrlNo == 0) {	
+		if ( ctrlNo == 0) {
 			intf->rx_fifo[ctrlNo] = intf->dmavadd;
 		}
 		else {
 			intf->rx_fifo[ctrlNo] = intf->rx_fifo[ctrlNo-1] + IXXAT_PCI_RES_HEADER_SIZE + data_off;
 		}
 
-		obj_tag = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_TAG)); 
+		obj_tag = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_TAG));
 		obj_size = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_OBJ_SIZE));
-		obj_num = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_NUM_OBJ));	
+		obj_num = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_NUM_OBJ));
 		data_off = obj_size * obj_num;
 
-		MemOffset = intf->rx_fifo[ctrlNo] - intf->dmavadd;
-		ix_trace_printk ("%08x Fifo %i Rx %p (%i), size:%i, num, %i\n",  obj_tag,ctrlNo, intf->rx_fifo[ctrlNo], MemOffset, obj_size, obj_num);
-		#ifdef DEBUG	
-			Showdump (intf->rx_fifo[ctrlNo], 0x40);
-		#endif			
+		if (IXXAT_PCI_PCRFIFO_RES_TAG != obj_tag)
+			dev_err(&intf->pdev->dev, "Error: Unexpected rx fifo[%d] resource tag: %x expected: %x", ctrlNo, obj_tag, IXXAT_PCI_PCRFIFO_RES_TAG);
+
+		memOffset = intf->rx_fifo[ctrlNo] - intf->dmavadd;
+		ix_trace_printk ("%08x Fifo %i Rx %p (%i), size:%i, num, %i\n",  obj_tag,ctrlNo, intf->rx_fifo[ctrlNo], memOffset, obj_size, obj_num);
+		#ifdef DEBUG
+			showdump(intf->rx_fifo[ctrlNo], 0x40);
+		#endif
 
 		++ctrlNo;
 	} ;
@@ -1861,7 +2088,7 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 	dev->state = IXXAT_PCI_STATE_CONNECTED;
 
 	spin_lock_init(&dev->rcv_lock);
-	netif_napi_add(netdev, &dev->napi, ixxat_pci_napi_rx_poll, 2);
+	netif_napi_add_weight(netdev, &dev->napi, ixxat_pci_napi_rx_poll, 2);
 
 	dev->can.clock.freq = adapter->clock;
 	dev->can.bittiming_const = adapter->bt;
@@ -1879,7 +2106,7 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 
 	dev->prev_dev = pci_get_drvdata(pdev);
 	pci_set_drvdata(pdev, dev);
-	
+
 	dev->tx_fifo = intf->tx_fifo[ctrl_idx];
 	dev->rx_fifo = intf->rx_fifo[ctrl_idx];
 
@@ -1887,8 +2114,14 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 
 	err = register_candev(netdev);
 	if (err) {
-		dev_err(&intf->pdev->dev,
+		netdev_err(netdev,
 			"Error %d: Failed to register Can device\n", err);
+		goto free_candev;
+	}
+
+	err = sysfs_create_group(&netdev->dev.kobj, &ixxat_pdev_group);
+	if (err < 0) {
+		netdev_err(netdev, "Error: %d: create sysfs failed\n", err);
 		goto free_candev;
 	}
 
@@ -1897,13 +2130,15 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 
 	if (!intf->dev)
 		intf->dev = dev;
-	
-	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
-	if (err) {
-		dev_err(&intf->pdev->dev,
-			"Error %d: Failed to get device information\n", err);
-		goto unreg_candev;
-	}
+
+	netdev->addr_len = sizeof(intf->dev_info.intf_id);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0)
+	netdev->dev_addr = intf->dev_info.intf_id;
+#else
+	dev_addr_mod(netdev, 0, intf->dev_info.intf_id, sizeof(intf->dev_info.intf_id));
+#endif
+	netdev->dev_id = ctrl_idx;
+	netdev->dev_port = ctrl_idx;
 
 	netdev_info(netdev, "%s: Connected Channel %u (device %s)\n",
 		    intf->dev_info.intf_name, ctrl_idx,
@@ -1911,8 +2146,6 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 
 	return 0;
 
-unreg_candev:
-	unregister_candev(netdev);
 free_candev:
 	pci_set_drvdata(intf->pdev, dev->prev_dev);
 	free_candev(netdev);
@@ -1926,24 +2159,30 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct ixxat_pci_interface *intf;
 	struct ixxat_intf_caps intf_caps;
 	int i;
-	u32 mem_len;	
+	u32 mem_len;
 	int err = pci_enable_device(pdev);
-
 	if (err)
 		return err;
+
+	err = pci_request_regions(pdev, KBUILD_MODNAME);
+	if (err)
+		goto lbl_disable_pci;
 
 	pci_set_master(pdev);
 
 	adapter = ixxat_pci_get_adapter(id->device);
 	if (!adapter) {
-		pr_err("%s: Unknown device id %d\n",
-		       KBUILD_MODNAME, id->device);
-		return -ENODEV;
+		pr_err("%s: Unknown device id %d\n", KBUILD_MODNAME, id->device);
+		err = -ENODEV;
+		goto lbl_release_regions;
 	}
 
 	intf = devm_kzalloc(&pdev->dev, sizeof(*intf), GFP_KERNEL);
 	if (!intf)
-		return -ENOMEM;
+	{
+		err = -ENOMEM;
+		goto lbl_release_regions;
+	}
 
 	intf->pdev = pdev;
 	mutex_init(&intf->cmd_lock);
@@ -1951,15 +2190,15 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* call the probe function of corresponding adapter */
 	err = ixxat_pci_register_dev(pdev, intf);
 	if (err)
-		goto lbl_set_intf;
-	
+		goto lbl_release_regions;
+
 	ix_trace_printk ( "ixxat_init_cmdfifo\n");
 	ixxat_init_cmdfifo ( intf, NULL );
 
 	/* reset the interface once */
 	err = ixxat_pci_mc_reset(intf);
 	if (err)
-		goto lbl_free_complete;	
+		goto lbl_free_memory;
 
 	/* convey dma hardware address to the interface */
 	err = ixxat_pci_convey_dma(intf, 1);
@@ -1970,44 +2209,43 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	// is made on the start ctrl
 	//err = ixxat_pci_int_ena_req(intf, 1);
 	//if (err)
-	//	goto lbl_free_complete;
+	//	goto lbl_dev_prepare_failed;
 
 	/* send a test command to the device's command channel */
 	err = ixxat_pci_test_cmd(intf);
 	if (err)
-		goto lbl_free_complete;
+		goto lbl_dev_prepare_failed;
 
 	/* test if dma address was successfully delivered to the interface */
 	err = ixxat_pci_test_dma(intf);
 	if (err)
-		goto lbl_free_complete;
+		goto lbl_dev_prepare_failed;
 
 	/* upload the device's firmware */
 	err = ixxat_pci_upload_fw(pdev, intf);
 	if (err)
-		goto lbl_free_complete; //Changed
+		goto lbl_dev_prepare_failed;
 
 	/* start uploaded firmware */
 	err = ixxat_pci_start_fw(intf);
 	if (err)
-		goto lbl_free_complete;
+		goto lbl_dev_prepare_failed;
 
 	/* give device some time to start */
 	msleep(100);
-	
+
 	ix_trace_printk ( "ixxat_init_cmdfifo\n");
-	ixxat_init_cmdfifo ( intf, NULL );	
-	
+	ixxat_init_cmdfifo ( intf, NULL );
+
 	err = ixxat_pci_get_intf_caps(intf, &intf_caps);
 	if (err)
-		goto lbl_free_complete;
+		goto lbl_dev_prepare_failed;
 
 	err = ixxat_pci_AdrTableSize(intf, &mem_len);
 	ix_trace_printk ( "ixxat_pci_AdrTableSize %i (-> mem_len %i)\n", err, mem_len);
 	err = ixxat_pci_AdrTable_Establish (intf, 0, mem_len + 1);
 	ix_trace_printk ( "ixxat_pci_AdrTable_Establish %i\n", err);
 
-//	ixxat_mem_dump (int, mem_len);
 	adapter->ctrl_count = 0;
 
 	for (i = 0; i < intf_caps.bus_ctrl_count; i++) {
@@ -2016,7 +2254,30 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 			adapter->ctrl_count++;
 		}
 	}
-	
+
+	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
+	if (err) {
+		dev_err(&pdev->dev,"Error %d: Failed to get device information\n", err);
+		goto lbl_dev_prepare_failed;
+	}
+
+	err = ixxat_pci_get_firmware_info2(intf, &intf->fw_info);
+	if (err) {
+		dev_info(&pdev->dev,"Error %d: Failed to get firmware information version 2\n", err);
+		err = ixxat_pci_get_firmware_info(intf, &intf->fw_info);
+		if (err) {
+			dev_err(&pdev->dev,"Error %d: Failed to get firmware information version\n", err);
+			goto lbl_dev_prepare_failed;
+		}
+	}
+
+	dev_info(&pdev->dev, "Device type     : %.*s\n", (int)(sizeof(intf->dev_info.intf_name)), intf->dev_info.intf_name);
+	dev_info(&pdev->dev, "Device id       : %.*s\n", (int)(sizeof(intf->dev_info.intf_id)), intf->dev_info.intf_id);
+	dev_info(&pdev->dev, "Device version  : 0x%04X\n", intf->dev_info.intf_version);
+	dev_info(&pdev->dev, "FPGA version    : 0x%08X\n", intf->dev_info.intf_fpga_version);
+	dev_info(&pdev->dev, "Firmware version: %d.%d.%d.%d (type: %d)\n", 
+		intf->fw_info.major_version, intf->fw_info.minor_version, intf->fw_info.build_version, intf->fw_info.revision, intf->fw_info.firmware_type);
+
 	ix_trace_printk ( "ixxat_init_fwfifos\n");
 	ixxat_init_fwfifos ( intf, adapter->ctrl_count );
 
@@ -2029,14 +2290,14 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 				dev_err(&intf->pdev->dev,
 					"Error %d: Device failed %d\n", err, i);
 				ixxat_pci_disconnect(pdev);
-				goto lbl_free_complete;
+				goto lbl_dev_prepare_failed;
 			}
 		}
 	}
 
 	return err;
 
-lbl_free_complete:
+lbl_dev_prepare_failed:
 	ixxat_pci_convey_dma(intf, 1);  //Firmware Fix (0)
 	ixxat_pci_int_ena_req(intf, 0, 0x00FF0000);
 
@@ -2053,7 +2314,7 @@ lbl_free_memory:
 	intf->addmemvadd = NULL;
 
 	if (intf->dmavadd)
-		pci_free_consistent(pdev, intf->dmalen, intf->dmavadd,
+		dma_free_coherent(&pdev->dev, intf->dmalen, intf->dmavadd,
 				    intf->dmaadd);
 
 	iounmap(intf->memvadd);
@@ -2062,11 +2323,18 @@ lbl_free_memory:
 	iounmap(intf->reg1vadd);
 	release_mem_region(intf->reg1add, intf->reg1len);
 
-lbl_set_intf:
+lbl_release_regions:
+	pci_release_regions(pdev);
+
+lbl_disable_pci:
 	pci_disable_device(pdev);
 	devm_kfree(&pdev->dev, intf);
 
-	return err;
+	/* pci_xxx_config_word() return positive PCIBIOS_xxx error codes while
+	 * the probe() function must return a negative errno in case of failure
+	 * (err is unchanged if negative)
+	 */
+	return pcibios_err_to_errno(err);
 }
 
 static struct pci_driver ixxat_pci_driver = {

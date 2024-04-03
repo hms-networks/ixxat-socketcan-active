@@ -20,42 +20,44 @@
 
 #include "ixxat_pci_core.h"
 
-#define IFIFD_RXFIFO_DLC 0x0000000F
-#define IFIFD_RXFIFO_RTR BIT(4)
-#define IFIFD_RXFIFO_EDL BIT(5)
-#define IFIFD_RXFIFO_BRS BIT(6)
-#define IFIFD_RXFIFO_ESI BIT(7)
-#define IFIFD_RXFIFO_FRN 0xFF000000
+#include "ixxat_kernel_adapt.h"
 
-#define IFIFD_RXFIFO_IDSTD 0x000007FF
-#define IFIFD_RXFIFO_IDEXT_18_28 0x000007FF
-#define IFIFD_RXFIFO_IDEXT_00_17 0x1FFFF800
-#define IFIFD_RXFIFO_IDE BIT(29)
+#define IFIFD_RXFIFO_DLC		0x0000000F
+#define IFIFD_RXFIFO_RTR		BIT(4)
+#define IFIFD_RXFIFO_EDL		BIT(5)
+#define IFIFD_RXFIFO_BRS		BIT(6)
+#define IFIFD_RXFIFO_ESI		BIT(7)
+#define IFIFD_RXFIFO_FRN		0xFF000000
 
-#define IFIFD_RXFIFO_DLC_S 0
-#define IFIFD_RXFIFO_FRN_S 24
-#define IFIFD_RXFIFO_IDSTD_S 0
-#define IFIFD_TXFIFO_FRN_S 24
+#define IFIFD_RXFIFO_IDSTD		0x000007FF
+#define IFIFD_RXFIFO_IDEXT_18_28	0x000007FF
+#define IFIFD_RXFIFO_IDEXT_00_17	0x1FFFF800
+#define IFIFD_RXFIFO_IDE		BIT(29)
 
-#define IFIFD_TXFIFO_DLC 0x0000000F
-#define IFIFD_TXFIFO_RTR BIT(4)
-#define IFIFD_TXFIFO_EDL BIT(5)
-#define IFIFD_TXFIFO_BRS BIT(6)
-#define IFIFD_TXFIFO_FRN 0xFF000000
+#define IFIFD_RXFIFO_DLC_S		0
+#define IFIFD_RXFIFO_FRN_S		24
+#define IFIFD_RXFIFO_IDSTD_S		0
+#define IFIFD_TXFIFO_FRN_S		24
 
-#define IFIFD_TXFIFO_IDSTD 0x000007FF
-#define IFIFD_TXFIFO_IDE BIT(29)
+#define IFIFD_TXFIFO_DLC		0x0000000F
+#define IFIFD_TXFIFO_RTR		BIT(4)
+#define IFIFD_TXFIFO_EDL		BIT(5)
+#define IFIFD_TXFIFO_BRS		BIT(6)
+#define IFIFD_TXFIFO_FRN		0xFF000000
 
-#define IFIFD_R2_WR_ADD_MSG BIT(0)
+#define IFIFD_TXFIFO_IDSTD		0x000007FF
+#define IFIFD_TXFIFO_IDE		BIT(29)
 
-#define IXXAT_IFIFD_FIFOCMD 0x00
-#define IXXAT_IFIFD_TXSUSPEND 0x04
-#define IXXAT_IFIFD_TXREPCOUNT 0x08
-#define IXXAT_IFIFD_DLC 0x0c
-#define IXXAT_IFIFD_ID 0x10
-#define IXXAT_IFIFD_DATA 0x14
+#define IFIFD_R2_WR_ADD_MSG		BIT(0)
 
-#define IXXAT_IFIFD_RXTIMESTAMP 0x08
+#define IXXAT_IFIFD_FIFOCMD		0x00
+#define IXXAT_IFIFD_TXSUSPEND		0x04
+#define IXXAT_IFIFD_TXREPCOUNT		0x08
+#define IXXAT_IFIFD_DLC			0x0c
+#define IXXAT_IFIFD_ID			0x10
+#define IXXAT_IFIFD_DATA		0x14
+
+#define IXXAT_IFIFD_RXTIMESTAMP		0x08
 
 #define IXXAT_PCI_FD_MODES (CAN_CTRLMODE_3_SAMPLES | \
 			    CAN_CTRLMODE_ONE_SHOT | \
@@ -65,28 +67,24 @@
 			    CAN_CTRLMODE_FD | \
 			    CAN_CTRLMODE_FD_NON_ISO)
 
-#define IXXAT_PCI2CAN_TSEG1_MIN 1
-#define IXXAT_PCI2CAN_TSEG1_MAX 256
-#define IXXAT_PCI2CAN_TSEG2_MIN 1
-#define IXXAT_PCI2CAN_TSEG2_MAX 256
-#define IXXAT_PCI2CAN_SJW_MAX 128
-#define IXXAT_PCI2CAN_BRP_MIN 2
-#define IXXAT_PCI2CAN_BRP_MAX 513
-#define IXXAT_PCI2CAN_BRP_INC 1
+#define IXXAT_PCI2CAN_TSEG1_MIN		1
+#define IXXAT_PCI2CAN_TSEG1_MAX		256
+#define IXXAT_PCI2CAN_TSEG2_MIN		1
+#define IXXAT_PCI2CAN_TSEG2_MAX		256
+#define IXXAT_PCI2CAN_SJW_MAX		128
+#define IXXAT_PCI2CAN_BRP_MIN		2
+#define IXXAT_PCI2CAN_BRP_MAX		513
+#define IXXAT_PCI2CAN_BRP_INC		1
 
-#define IXXAT_PCI2CAN_TSEG1_MIN_DATA 1
-#define IXXAT_PCI2CAN_TSEG1_MAX_DATA 256
-#define IXXAT_PCI2CAN_TSEG2_MIN_DATA 1
-#define IXXAT_PCI2CAN_TSEG2_MAX_DATA 256
-#define IXXAT_PCI2CAN_SJW_MAX_DATA 128
-#define IXXAT_PCI2CAN_BRP_MIN_DATA 2
-#define IXXAT_PCI2CAN_BRP_MAX_DATA 513
-#define IXXAT_PCI2CAN_BRP_INC_DATA 1
+#define IXXAT_PCI2CAN_TSEG1_MIN_DATA	1
+#define IXXAT_PCI2CAN_TSEG1_MAX_DATA	256
+#define IXXAT_PCI2CAN_TSEG2_MIN_DATA	1
+#define IXXAT_PCI2CAN_TSEG2_MAX_DATA	256
+#define IXXAT_PCI2CAN_SJW_MAX_DATA	128
+#define IXXAT_PCI2CAN_BRP_MIN_DATA	2
+#define IXXAT_PCI2CAN_BRP_MAX_DATA	513
+#define IXXAT_PCI2CAN_BRP_INC_DATA	1
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,11,0)
-  #define can_fd_dlc2len(dlc) can_dlc2len(get_canfd_dlc(dlc))
-  #define can_fd_len2dlc(dlc) can_len2dlc(dlc)
-#endif
 
 static const struct can_bittiming_const pci2canfd_bt = {
 	.name = KBUILD_MODNAME,
@@ -169,14 +167,14 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 							btd->prop_seg));
 	}
 
-	err = mutex_lock_interruptible(&intf->cmd_lock);	
-	
+	err = mutex_lock_interruptible(&intf->cmd_lock);
+
 	if ( err ) {
 		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
 		kfree (cmd);
-	}	
+	}
 	else
-	{		
+	{
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err) {
 			dev_err(&intf->pdev->dev, "Error %d: Init ctrl failed\n", err);
@@ -241,7 +239,7 @@ static int ixxat_pci_handle_canfdmsg(struct ixxat_pci_device *dev, void *base)
 	if (raw_dlc & IFIFD_RXFIFO_RTR)
 		cf->can_id |= CAN_RTR_FLAG;
 	else {
-		data = (u32 *)cf->data;		
+		data = (u32 *)cf->data;
 		for (i = 0, j = 0; i < cf->len; ++j, i += sizeof(u32))
 			data[j] = *(u32 *)(base + IXXAT_IFIFD_DATA + i);
 	}
@@ -290,7 +288,7 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 	void __iomem *data;
 	int i;
 	bool selfReception = false;
-	bool echoSkb       = false;	
+	bool echoSkb       = false;
 	u32 can_id;
 	u32 can_dlc = 0;
 	u32 write_index = ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX);
@@ -355,20 +353,22 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 		}
 	} else {
 		netdev->stats.tx_bytes += cf->len;
-		netdev->stats.tx_packets += 1;			
+		netdev->stats.tx_packets += 1;
 	}
 
 	if ( selfReception ) {
 		can_dlc |= (dev->frn_write << IFIFD_TXFIFO_FRN_S)
 			& IFIFD_TXFIFO_FRN;
-	}	
+	}
 
 	if ( echoSkb) {
 		spin_lock_irqsave(&dev->rcv_lock, spin_flags);
-		if (dev->can.echo_skb[dev->frn_write - 1])
-			can_free_echo_skb(dev->netdev, dev->frn_write - 1);
 
-		can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1);
+		// if there is already a echo skb registered -> free it
+		if (dev->can.echo_skb[dev->frn_write - 1])
+			can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
+
+		can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
 
 		dev->frn_write++;
 		if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)

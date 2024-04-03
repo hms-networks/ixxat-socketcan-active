@@ -17,176 +17,187 @@
 #ifndef IXXAT_PCI_CORE_H_
 #define IXXAT_PCI_CORE_H_
 
-//#define IXXAT_PCI_DRIVER_NAME "ix_active_can"
-//#define IXXAT_PCI_DEV_NAME "ixxat_pci"
-#define IXXAT_FIRMWARE "ixxat/ixx_active_can.fw"
+#define IXXAT_FIRMWARE			"ixxat/ixx_active_can.fw"
 
-#define IXXAT_PCI_VENDOR_ID 0x1BEE
+#define IXXAT_PCI_VENDOR_ID		0x1BEE
 
-#define IXXAT_PCI_CLOCK 80000000
+#define IXXAT_PCI_CLOCK			80000000
 
 /* CAN */
-#define CAN_IB200_PRODUCT_ID 0x0003
-#define CAN_IB210_PRODUCT_ID 0x0014
-#define CAN_IB230_PRODUCT_ID 0x0006
-#define CAN_IB400_PRODUCT_ID 0x0011
-#define CAN_IB410_PRODUCT_ID 0x0016
+#define CAN_IB200_PRODUCT_ID		0x0003
+#define CAN_IB210_PRODUCT_ID		0x0014
+#define CAN_IB230_PRODUCT_ID		0x0006
+#define CAN_IB400_PRODUCT_ID		0x0011
+#define CAN_IB410_PRODUCT_ID		0x0016
 /* CAN FD */
-#define CAN_IB600_PRODUCT_ID 0x000f
-#define CAN_IB610_PRODUCT_ID 0x0018
-//#define CAN_IB640_PRODUCT_ID 0x002e
-#define CAN_IB800_PRODUCT_ID 0x001b
-#define CAN_IB810_PRODUCT_ID 0x001c
+#define CAN_IB600_PRODUCT_ID		0x000f
+#define CAN_IB610_PRODUCT_ID		0x0018
+//#define CAN_IB640_PRODUCT_ID		0x002e
+#define CAN_IB800_PRODUCT_ID		0x001b
+#define CAN_IB810_PRODUCT_ID		0x001c
 
-#define IXXAT_PCI_BUS_TYPE(busctrl) ((u8)(((busctrl) >> 8) & 0x00FF))
+#define IXXAT_PCI_BUS_TYPE(busctrl)	((u8)(((busctrl) >> 8) & 0x00FF))
 
-#define CAN_IB_IFI_CAN_BASE 0x2000
-#define CAN_IB_IFI_CAN_SIZE 0x1000
+#define CAN_IB_IFI_CAN_BASE		0x2000
+#define CAN_IB_IFI_CAN_SIZE		0x1000
 
-#define IXXAT_PCI_CARDNAME_SIZE 0x0010
-#define IXXAT_PCI_HWSERIAL_SIZE 0x0010
+#define IXXAT_PCI_CARDNAME_SIZE		0x0010
+#define IXXAT_PCI_HWSERIAL_SIZE		0x0010
 
-#define IXXAT_PCI_STATE_CONNECTED BIT(0)
-#define IXXAT_PCI_STATE_RUNNING BIT(1)
+#define IXXAT_PCI_STATE_CONNECTED	BIT(0)
+#define IXXAT_PCI_STATE_RUNNING		BIT(1)
 
-#define PCIE_ALTERA_LCR_INTCSR 0x0040
-#define PCIE_ALTERALCR_A2P_INTENA 0x0050
+#define PCIE_ALTERA_LCR_INTCSR		0x0040
+#define PCIE_ALTERALCR_A2P_INTENA	0x0050
 
-#define IXXAT_PCI_MAX_TX_TRANS 0x10
+#define IXXAT_PCI_MAX_TX_TRANS		0x10
 
-#define IXXAT_PCI_BUS_CAN 1
+#define IXXAT_PCI_BUS_CAN		1
 
-#define IXXAT_PCI_BTMODE_NAT BIT(0)
-#define IXXAT_PCI_BTMODE_TSM BIT(1)
+#define IXXAT_PCI_BTMODE_NAT		BIT(0)
+#define IXXAT_PCI_BTMODE_TSM		BIT(1)
 
-#define IXXAT_PCI_STOP_ACTION_CLEARALL 0x3
+#define IXXAT_PCI_STOP_ACTION_CLEARALL	0x3
 
-#define IXXAT_PCI_RESET 0x00000001
-#define IXXAT_PCI_RESET_PERIOD 10000
-#define IXXAT_PCI_RESET_DELAY 100000
+#define IXXAT_PCI_RESET			0x00000001
+#define IXXAT_PCI_RESET_PERIOD		10000
+#define IXXAT_PCI_RESET_DELAY		100000
 
-#define IXXAT_PCI_ALTERA_MBX_OFF 0x800
-#define IXXAT_PCI_ALTERA_ADRTRANSSTART_OFF 0x1000
-#define IXXAT_PCI_ALTERA_ADRTRANSEND_OFF 0x2000
-#define IXXAT_PCI_ALTERA_RESET_CARD_OFF 0x4000
+#define IXXAT_PCI_ALTERA_MBX_OFF		0x800
+#define IXXAT_PCI_ALTERA_ADRTRANSSTART_OFF	0x1000
+#define IXXAT_PCI_ALTERA_ADRTRANSEND_OFF	0x2000
+#define IXXAT_PCI_ALTERA_RESET_CARD_OFF		0x4000
 
-#define IXXAT_PCI_SFF_ID 0x0003FFFF
-#define IXXAT_PCI_SFF_SHIFT 11
-#define IXXAT_PCI_EFF_ID 0x1FFC0000
-#define IXXAT_PCI_EFF_SHIFT 18
+#define IXXAT_PCI_SFF_ID		0x0003FFFF
+#define IXXAT_PCI_SFF_SHIFT		11
+#define IXXAT_PCI_EFF_ID		0x1FFC0000
+#define IXXAT_PCI_EFF_SHIFT		18
 
-#define IXXAT_PCI_MSG_TYPE_VCI 0x00
-#define IXXAT_PCI_MSG_TYPE_IFI 0x01
-#define IXXAT_PCI_MSG_FLAGS_TYPE 0x000000FF
+#define IXXAT_PCI_MSG_TYPE_VCI		0x00
+#define IXXAT_PCI_MSG_TYPE_IFI		0x01
+#define IXXAT_PCI_MSG_FLAGS_TYPE	0x000000FF
 
-#define IXXAT_PCI_OPMODE_STANDARD BIT(0)
-#define IXXAT_PCI_OPMODE_EXTENDED BIT(1)
-#define IXXAT_PCI_OPMODE_ERRFRAME BIT(2)
-#define IXXAT_PCI_OPMODE_LISTONLY BIT(3)
+#define IXXAT_PCI_OPMODE_STANDARD	BIT(0)
+#define IXXAT_PCI_OPMODE_EXTENDED	BIT(1)
+#define IXXAT_PCI_OPMODE_ERRFRAME	BIT(2)
+#define IXXAT_PCI_OPMODE_LISTONLY	BIT(3)
 
-#define IXXAT_PCI_EXMODE_EXTDATA BIT(0)
-#define IXXAT_PCI_EXMODE_FASTDATA BIT(1)
-#define IXXAT_PCI_EXMODE_ISOFD BIT(2)
+#define IXXAT_PCI_EXMODE_EXTDATA	BIT(0)
+#define IXXAT_PCI_EXMODE_FASTDATA	BIT(1)
+#define IXXAT_PCI_EXMODE_ISOFD		BIT(2)
 
-#define IXXAT_PCI_CAN_STATUS_OK 0x00000000
-#define IXXAT_PCI_CAN_STATUS_OVRRUN BIT(1)
-#define IXXAT_PCI_CAN_STATUS_ERRLIM BIT(2)
-#define IXXAT_PCI_CAN_STATUS_BUSOFF BIT(3)
-#define IXXAT_PCI_CAN_STATUS_ERR_PAS BIT(13)
+#define IXXAT_PCI_CAN_STATUS_OK		0x00000000
+#define IXXAT_PCI_CAN_STATUS_OVRRUN	BIT(1)
+#define IXXAT_PCI_CAN_STATUS_ERRLIM	BIT(2)
+#define IXXAT_PCI_CAN_STATUS_BUSOFF	BIT(3)
+#define IXXAT_PCI_CAN_STATUS_ERR_PAS	BIT(13)
 
-#define IXXAT_PCI_CAN_ERROR_COUNTER_RX 3
-#define IXXAT_PCI_CAN_ERROR_COUNTER_TX 4
+#define IXXAT_PCI_CAN_ERROR_COUNTER_RX	3
+#define IXXAT_PCI_CAN_ERROR_COUNTER_TX	4
 
-#define IXXAT_PCI_CAN_ERROR_STUFF 1
-#define IXXAT_PCI_CAN_ERROR_FORM 2
-#define IXXAT_PCI_CAN_ERROR_ACK 3
-#define IXXAT_PCI_CAN_ERROR_BIT 4
-#define IXXAT_PCI_CAN_ERROR_CRC 6
+#define IXXAT_PCI_CAN_ERROR_STUFF	1
+#define IXXAT_PCI_CAN_ERROR_FORM	2
+#define IXXAT_PCI_CAN_ERROR_ACK		3
+#define IXXAT_PCI_CAN_ERROR_BIT		4
+#define IXXAT_PCI_CAN_ERROR_CRC		6
 
-#define IXXAT_PCI_CAN_INFO 0x01
-#define IXXAT_PCI_CAN_ERROR 0x02
-#define IXXAT_PCI_CAN_STATUS 0x03
-#define IXXAT_PCI_CAN_WAKEUP 0x04
-#define IXXAT_PCI_CAN_TIMEOVR 0x05
-#define IXXAT_PCI_CAN_TIMERST 0x06
+#define IXXAT_PCI_CAN_INFO		0x01
+#define IXXAT_PCI_CAN_ERROR		0x02
+#define IXXAT_PCI_CAN_STATUS		0x03
+#define IXXAT_PCI_CAN_WAKEUP		0x04
+#define IXXAT_PCI_CAN_TIMEOVR		0x05
+#define IXXAT_PCI_CAN_TIMERST		0x06
 
-#define IXXAT_PCI_ENABLE_INT 0x00FF0000
-#define IXXAT_PCI_DISABLE_INT 0xFF00FFFF
-#define IXXAT_PCI_STAT_MASK 0x00FF0080
+#define IXXAT_PCI_ENABLE_INT		0x00FF0000
+#define IXXAT_PCI_DISABLE_INT		0xFF00FFFF
+#define IXXAT_PCI_STAT_MASK		0x00FF0080
 
-#define IXXAT_PCI_DMA_ADD_HIGH 0xFFFFFFFF
-#define IXXAT_PCI_DMA_ADD_LOW 0xFFFFFFFC
-#define IXXAT_PCI_DMA_OFFSET_HIGH 32
+#define IXXAT_PCI_DMA_ADD_HIGH		0xFFFFFFFF
+#define IXXAT_PCI_DMA_ADD_LOW		0xFFFFFFFC
+#define IXXAT_PCI_DMA_OFFSET_HIGH	32
 
-#define IXXAT_PCI_NUM_CMD_FIFO 2
+#define IXXAT_PCI_NUM_CMD_FIFO		2
 
-#define IXXAT_PCI_DMA_TEST_ADDR 0x80100000
-#define IXXAT_PCI_DMA_TEST_CONTENT "DMA Memory Check"
+#define IXXAT_PCI_DMA_TEST_ADDR		0x80100000
+#define IXXAT_PCI_DMA_TEST_CONTENT	"DMA Memory Check"
 
-#define IXXAT_PCI_CMD_MAX_SIZE 240
-#define IXXAT_PCI_CMD_LB_SIZE 228
-#define IXXAT_PCI_CMD_TIMEOUT_NS 500000000
+#define IXXAT_PCI_CMD_MAX_SIZE		240
+#define IXXAT_PCI_CMD_LB_SIZE		228
+#define IXXAT_PCI_CMD_TIMEOUT_NS	500000000
 
-#define IXXAT_PCI_CMD_START 0x326
-#define IXXAT_PCI_CMD_STOP 0x327
-#define IXXAT_PCI_CMD_INIT_V2 0x337
+#define IXXAT_PCI_CMD_START		0x326
+#define IXXAT_PCI_CMD_STOP		0x327
+#define IXXAT_PCI_CMD_INIT_V2		0x337
 
-#define IXXAT_PCI_CMD_GET_DEVCAPS 0x401
-#define IXXAT_PCI_CMD_GET_DEVINFO 0x402
+#define IXXAT_PCI_CMD_GET_FWINFO	0x400
+#define IXXAT_PCI_CMD_GET_DEVCAPS	0x401
+#define IXXAT_PCI_CMD_GET_DEVINFO	0x402
+#define IXXAT_PCI_CMD_GET_FWINFO2	0x403
 
 #define IXXAT_PCI_CMD_ADRTABLE_ESTABLISH 0x440
-#define IXXAT_PCI_CMD_ADRTABLE_SIZE 0x441
-#define IXXAT_PCI_CMD_LOOPBACK 0x500
-#define IXXAT_PCI_CMD_STARTFIRMWARE 0x501
-#define IXXAT_PCI_CMD_TRIGGER_INT 0x502
-#define IXXAT_PCI_CMD_READ_BLOCK 0x503
-#define IXXAT_PCI_CMD_WRITE_BLOCK 0x504
+#define IXXAT_PCI_CMD_ADRTABLE_SIZE	0x441
+#define IXXAT_PCI_CMD_LOOPBACK		0x500
+#define IXXAT_PCI_CMD_STARTFIRMWARE	0x501
+#define IXXAT_PCI_CMD_TRIGGER_INT	0x502
+#define IXXAT_PCI_CMD_READ_BLOCK	0x503
+#define IXXAT_PCI_CMD_WRITE_BLOCK	0x504
 
-#define IXXAT_PCI_RESDIR_HTOD 0x0001
-#define IXXAT_PCI_RESDIR_DTOH 0x0002
+#define IXXAT_PCI_RESDIR_HTOD		0x0001
+#define IXXAT_PCI_RESDIR_DTOH		0x0002
 
-#define IXXAT_PCI_RES_TAG 0x00
-#define IXXAT_PCI_RES_SIZE 0x04 //C
-#define IXXAT_PCI_RES_DIR 0x08 //C
-#define IXXAT_PCI_RES_NUM_OBJ 0x0c //C
-#define IXXAT_PCI_RES_OBJ_SIZE 0x10 //C
-#define IXXAT_PCI_RES_WRITE_IDX 0x14 //C
-#define IXXAT_PCI_RES_READ_IDX 0x18 //C
-#define IXXAT_PCI_RES_DATA 0x1c //C
-#define IXXAT_PCI_RES_VER_OFF 0x10
+#define IXXAT_PCI_RES_TAG		0x00
+#define IXXAT_PCI_RES_SIZE		0x04 //C
+#define IXXAT_PCI_RES_DIR		0x08 //C
+#define IXXAT_PCI_RES_NUM_OBJ		0x0c //C
+#define IXXAT_PCI_RES_OBJ_SIZE		0x10 //C
+#define IXXAT_PCI_RES_WRITE_IDX		0x14 //C
+#define IXXAT_PCI_RES_READ_IDX		0x18 //C
+#define IXXAT_PCI_RES_DATA		0x1c //C
+#define IXXAT_PCI_RES_VER_OFF		0x10
 
-#define IXXAT_PCI_RES_MAX_OBJ_SIZE 252
-#define IXXAT_PCI_RES_HEADER_SIZE 28
-#define IXXAT_PCI_VER_SIZE 0x10
-#define IXXAT_PCI_CAN_ERROR_LEN 5
+#define IXXAT_PCI_RES_MAX_OBJ_SIZE	252
+#define IXXAT_PCI_RES_HEADER_SIZE	28
+#define IXXAT_PCI_VER_SIZE		0x10
+#define IXXAT_PCI_CAN_ERROR_LEN		5
+
+// FIFO resource identifier ("FIFO")
+#define IXXAT_PCI_PCRFIFO_RES_TAG   0x4F464946
 
 /* size of available mapped DMA (after possible page shifting) */
-#define IXXAT_PCI_DMA_SIZE 0x80000
-/* Size of DMA Buffer 512kiB required DMA page size 4kiB => Add one page */
-//#define IXXAT_PCI_DMA_LEN (512 * 1024 + 4 * 1024)
-#define IXXAT_PCI_DMA_LEN (256 * 1024 + 4 * 1024)
-#define IXXAT_PCI_ADDMEM_LEN PAGE_SIZE
+#define IXXAT_PCI_DMA_SIZE		0x80000
+/* Size of DMA Buffer 512kiB required */
+#define IXXAT_PCI_DMA_LEN		(512 * 1024)
+#define IXXAT_PCI_ADDMEM_LEN		PAGE_SIZE
 
-#define IXXAT_PCI_DEFAULT_RESTART_MS 100
+#define IXXAT_PCI_DEFAULT_RESTART_MS	100
 
-#define IX_LOOP_DIS	0x00	//disable self reception
-#define IX_LOOP_SELF_RX	0x01	//enable self reception
-#define IX_LOOPBACK	0x02	//pass on message to application
+#define IX_LOOP_DIS			0x00	//disable self reception
+#define IX_LOOP_SELF_RX			0x01	//enable self reception
+#define IX_LOOPBACK			0x02	//pass on message to application
 
 struct ixxat_intf_info {
-	char intf_name[IXXAT_PCI_CARDNAME_SIZE]; /* device name */
-	char intf_id[IXXAT_PCI_HWSERIAL_SIZE]; /* unique device id */
-	u16 intf_version; /* device version ( 0, 1, ...) */
-	u32 intf_fpga_version; /* device version of FPGA design */
+	char intf_name[IXXAT_PCI_CARDNAME_SIZE];	/* device name */
+	char intf_id[IXXAT_PCI_HWSERIAL_SIZE];		/* unique device id */
+	u16 intf_version;				/* device version ( 0, 1, ...) */
+	u32 intf_fpga_version;				/* device version of FPGA design */
 	u16 reserved;
 } __packed;
 
-struct ixxat_intf_fw_info {
-	u32 firmware_type; /* type of currently running firmware */
-	u16 reserved; /* reserved */
-	u16 major_version; /* major firmware version number */
-	u16 minor_version; /* minor firmware version number */
-	u16 build_version; /* build firmware version number */
+struct ixxat_intf_firmware_info {
+	u32 firmware_type;		/* type of currently running firmware */
+	u16 reserved;			/* reserved */
+	u16 major_version;		/* major firmware version number */
+	u16 minor_version;		/* minor firmware version number */
+	u16 build_version;		/* build firmware version number */
+} __packed;
+
+struct ixxat_intf_firmware_info2 {
+	u32 firmware_type;		/* type of currently running firmware */
+	u16 reserved;			/* reserved */
+	u16 major_version;		/* major firmware version number */
+	u16 minor_version;		/* minor firmware version number */
+	u16 build_version;		/* build firmware version number */
+	u32 revision;			/* revision number */
 } __packed;
 
 struct ixxat_intf_caps {
@@ -196,15 +207,15 @@ struct ixxat_intf_caps {
 } __packed;
 
 struct ixxat_pci_fw {
-	__be16 len;
-	__be32 add;
+	__le16 length;
+	__le32 address;
 	u8 data[];
 } __packed;
 
 struct ixxat_pci_fwHdr {
 	char   caIdent[10];
-	__be32 type;          
-	__be32 maxlen;     
+	__le32 type;
+	__le32 maxlen;
 } __packed;
 
 /**
@@ -293,8 +304,8 @@ struct ixxat_pci_dal_res {
 
 struct ixxat_pci_write_req {
 	struct ixxat_pci_dal_req dal_req;
-	__le32 addr; /* address */
-	u8 data[]; /* data to be written */
+	__le32 addr;				/* address */
+	u8 data[];				/* data to be written */
 };
 
 struct ixxat_pci_write_res {
@@ -303,24 +314,24 @@ struct ixxat_pci_write_res {
 
 struct ixxat_pci_read_req {
 	struct ixxat_pci_dal_req dal_req;
-	__le32 addr; /* address */
+	__le32 addr;				/* address */
 };
 
 struct ixxat_pci_read_res {
 	struct ixxat_pci_dal_res dal_res;
-	u8 data[]; /* buffer for data bytes */
+	u8 data[];				/* buffer for data bytes */
 };
 
 struct ixxat_pci_loopback_cmd {
 	struct ixxat_pci_dal_req req;
-	u8 req_data[IXXAT_PCI_CMD_LB_SIZE]; /* buffer for data UINT8s */
+	u8 req_data[IXXAT_PCI_CMD_LB_SIZE];	/* buffer for data UINT8s */
 	struct ixxat_pci_dal_res res;
-	u8 res_data[IXXAT_PCI_CMD_LB_SIZE]; /* buffer for data UINT8s */
+	u8 res_data[IXXAT_PCI_CMD_LB_SIZE];	/* buffer for data UINT8s */
 } __packed;
 
 struct ixxat_pci_start_fw_cmd {
 	struct ixxat_pci_dal_req req;
-	__le32 reserved; /* unused variable */
+	__le32 reserved;			/* unused variable */
 	struct ixxat_pci_dal_res res;
 } __packed;
 
@@ -345,6 +356,18 @@ struct ixxat_pci_trigger_int_cmd {
 	__le32 mailbox;
 	__le32 content;
 	struct ixxat_pci_dal_res res;
+} __packed;
+
+struct ixxat_pci_fwinfo_cmd {
+	struct ixxat_pci_dal_req req;
+	struct ixxat_pci_dal_res res;
+	struct ixxat_intf_firmware_info info;
+} __packed;
+
+struct ixxat_pci_fwinfo2_cmd {
+	struct ixxat_pci_dal_req req;
+	struct ixxat_pci_dal_res res;
+	struct ixxat_intf_firmware_info2 info;
 } __packed;
 
 struct ixxat_pci_intf_info_cmd {
@@ -406,19 +429,19 @@ struct ixxat_pci_interface {
 	unsigned int device_irq;
 
 	struct ixxat_intf_info dev_info;
-	struct ixxat_intf_fw_info fw_info;
+	struct ixxat_intf_firmware_info2 fw_info;
 
 	struct pci_dev *pdev;
 	struct ixxat_pci_device *dev;
 
 	u8 started_mask;
 	u8 handle_data;
-	
+
 	void __iomem *cmd_tx_fifo;
-	void __iomem *cmd_rx_fifo;	
-	void __iomem *cmd_dbg_fifo;	
+	void __iomem *cmd_rx_fifo;
+	void __iomem *cmd_dbg_fifo;
 	void __iomem *tx_fifo[4];
-	void *rx_fifo[4];		
+	void *rx_fifo[4];
 
 	/* Ensure safe memory access while writing to the controller */
 	struct mutex cmd_lock;
@@ -453,7 +476,7 @@ struct ixxat_pci_device {
 	void __iomem *ifi_base;
 	void __iomem *tx_fifo;
 	void *rx_fifo;
-	
+
 	u8 can_mode;
 	u8 can_exmode;
 	bool loopback;

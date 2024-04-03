@@ -20,6 +20,15 @@
 
 #include "ixxat_pci_core.h"
 
+#include "ixxat_kernel_adapt.h"
+
+
+#if defined(CONFIG_TRACING) && defined(DEBUG)
+	#define ix_trace_printk(...) trace_printk(__VA_ARGS__)
+#else
+	#define ix_trace_printk(...)
+#endif
+
 #define IFIREG_DLC 0
 #define IFIREG_IDENTIFER 4
 #define IFIREG_DATA14 8
@@ -57,12 +66,9 @@
 #define IXXAT_PCI2CAN_BRP_MAX 257
 #define IXXAT_PCI2CAN_BRP_INC 1
 
-#if KERNEL_VERSION(5, 10, 17) > LINUX_VERSION_CODE
-  #define can_cc_dlc2len(dlc)  get_can_dlc(dlc)
-#endif
 
 static const struct can_bittiming_const pci2can_bt = {
-	.name = KBUILD_MODNAME, // IXXAT_PCI_DEV_NAME,
+	.name = KBUILD_MODNAME,
 	.tseg1_min = IXXAT_PCI2CAN_TSEG1_MIN,
 	.tseg1_max = IXXAT_PCI2CAN_TSEG1_MAX,
 	.tseg2_min = IXXAT_PCI2CAN_TSEG2_MIN,
@@ -202,7 +208,7 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 	void __iomem *data;
 	int i;
 	bool selfReception = false;
-	bool echoSkb       = false;		
+	bool echoSkb       = false;
 	u32 can_id;
 	u32 can_dlc = 0;
 	volatile u32 write_index = ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX);
@@ -210,7 +216,7 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 	volatile u32 obj_size = ioread32(fifo + IXXAT_PCI_RES_OBJ_SIZE);
 	volatile u32 obj_num = ioread32(fifo + IXXAT_PCI_RES_NUM_OBJ);
 	unsigned long spin_flags;
-	u32 intCtrlMask;	
+	u32 intCtrlMask;
 	bool fSend = true;
 
 	if (can_dropped_invalid_skb(netdev, skb))
@@ -239,34 +245,36 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 	else {
 		if ( cf->can_id == 0x800) {
 
+#if defined(CONFIG_TRACING) && defined(DEBUG)
 			volatile u32 regval = ioread32(dev->intf->reg1vadd + PCIE_ALTERALCR_A2P_INTENA);
 			volatile u32 intSR  = ioread32(dev->intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
-			trace_printk (" ena:%x sr:%x\n",regval, intSR);
+			ix_trace_printk (" ena:%x sr:%x\n",regval, intSR);
+#endif
 			fSend = false;
 		}
 		else if ( cf->can_id == 0x801) {
 			volatile u32 intSR  = ioread32(dev->intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
 			iowrite32(intSR, dev->intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
-			trace_printk (" reset Status sr:%x\n", intSR);
+			ix_trace_printk (" reset Status sr:%x\n", intSR);
 			fSend = false;
 		}
 		else if ( cf->can_id == 0x802) {
 			iowrite32(0xFFFFFFFF, dev->intf->reg1vadd + PCIE_ALTERALCR_A2P_INTENA);
-			trace_printk (" set all ints enabled\n");
+			ix_trace_printk (" set all ints enabled\n");
 			fSend = false;
-		}		
+		}
 
 
 		can_id = cf->can_id & IFI_R1_IDSTD;
 	}
 
 	if ( fSend ){
-		
+
 		can_dlc = cf->can_dlc & IFI_R0_WR_DLC;
 
 		if (cf->can_id & CAN_RTR_FLAG) {
 			can_dlc |= IFI_R0_WR_RTR;  //Fix - RTR
-		} 
+		}
 
 		if (dev->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
 			can_dlc |= IFI_R0_WR_SSM;
@@ -286,19 +294,19 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 			}
 		} else {
 			netdev->stats.tx_bytes += cf->can_dlc;
-			netdev->stats.tx_packets += 1;			
+			netdev->stats.tx_packets += 1;
 		}
 
 		if ( selfReception ) {
 			can_dlc |= (dev->frn_write << IFI_R0_FRN_S) & IFI_R0_RD_FRN;
-		}	
+		}
 
 		if ( echoSkb) {
 			spin_lock_irqsave(&dev->rcv_lock, spin_flags);
 			if (dev->can.echo_skb[dev->frn_write - 1])
-				can_free_echo_skb(dev->netdev, dev->frn_write - 1);
+				can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
 
-			can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1);
+			can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
 
 			dev->frn_write++;
 			if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)
@@ -308,14 +316,14 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 		}
 		else {
 			kfree_skb(skb);
-		}		
+		}
 
 		iowrite32(can_id , fifo_data + IFIREG_IDENTIFER);
 		iowrite32(can_dlc, fifo_data + IFIREG_DLC);
 
 		spin_lock_irqsave(&dev->rcv_lock, spin_flags);
 		iowrite32 (((write_index + 1) % obj_num), fifo + IXXAT_PCI_RES_WRITE_IDX);
-			
+
 		if (dev->frn_write == dev->frn_read ||
 			ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX) ==
 				ioread32(fifo + IXXAT_PCI_RES_READ_IDX))
@@ -327,7 +335,7 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 		// 0x00020000 -> ctrl 0
 		ixxat_pci_setup_altera_mailbox(dev->intf, (dev->ctrl_idx + 1), intCtrlMask);
 	}
-		
+
 
 	return NETDEV_TX_OK;
 }
