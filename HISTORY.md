@@ -1,6 +1,14 @@
 # ix_active_can
 
-## 2.0.492	(2024-04-02)
+## History
+
+### 2.0.520	(2024-06-04)
+
+- kernel >= 6.1.0: use can_dev_dropped_skb() instead of can_dropped_invalid_skb() to check skb in ixxat_usb_start_xmit()
+- replace kfree_skb() with dev_kfree_skb() calls
+- cleanup/restructure echo skb handling in start_xmit functions
+
+### 2.0.492	(2024-04-02)
 
 - add more error output to ixxat_pci_send_cmd()
 - fix communication via fifos on arm32 platforms (memcpy_toio/memcpy_fromio does not work on non-prefetchable memory region, and iowrite32_rep/ioread32_rep does not either)
@@ -23,6 +31,6 @@
 - fix warnings for type parameter used in skb functions
 - handle different signatures of skb and dlc functions depending on kernel version
 
-## 2.0.377	(2020-03-12)
+### 2.0.377	(2020-03-12)
 
 - initial version

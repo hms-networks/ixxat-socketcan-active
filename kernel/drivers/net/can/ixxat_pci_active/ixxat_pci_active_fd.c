@@ -288,7 +288,7 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 	void __iomem *data;
 	int i;
 	bool selfReception = false;
-	bool echoSkb       = false;
+	bool isloopback    = false;
 	u32 can_id;
 	u32 can_dlc = 0;
 	u32 write_index = ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX);
@@ -297,8 +297,13 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 	unsigned long spin_flags;
 	u32 intCtrlMask;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	if (can_dropped_invalid_skb(netdev, skb))
 		return NETDEV_TX_OK;
+#else
+	if (can_dev_dropped_skb(netdev, skb))
+		return NETDEV_TX_OK;
+#endif
 
 	if (!(dev->state & IXXAT_PCI_STATE_RUNNING)) {
 		netif_stop_queue(netdev);
@@ -344,40 +349,34 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 				  data + i);
 	}
 
-	if ((loopMode & IX_LOOP_SELF_RX) == IX_LOOP_SELF_RX) {
+	selfReception = ((loopMode & IX_LOOP_SELF_RX) == IX_LOOP_SELF_RX);
+	if (selfReception) {
 
-		selfReception = true; // set self reception
+		can_dlc |= (dev->frn_write << IFIFD_TXFIFO_FRN_S) & IFIFD_TXFIFO_FRN;
 
-		if ((loopMode & IX_LOOPBACK) == IX_LOOPBACK) {
-			echoSkb = true;
+		isloopback = ((loopMode & IX_LOOPBACK) == IX_LOOPBACK);
+		if (isloopback) {
+			spin_lock_irqsave(&dev->rcv_lock, spin_flags);
+
+			// if there is already a echo skb registered -> free it
+			if (dev->can.echo_skb[dev->frn_write - 1])
+				can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
+
+			can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
+
+			dev->frn_write++;
+			if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)
+				dev->frn_write = 1;
+
+			spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
 		}
+		else {
+			dev_kfree_skb(skb);
+		}
+
 	} else {
 		netdev->stats.tx_bytes += cf->len;
 		netdev->stats.tx_packets += 1;
-	}
-
-	if ( selfReception ) {
-		can_dlc |= (dev->frn_write << IFIFD_TXFIFO_FRN_S)
-			& IFIFD_TXFIFO_FRN;
-	}
-
-	if ( echoSkb) {
-		spin_lock_irqsave(&dev->rcv_lock, spin_flags);
-
-		// if there is already a echo skb registered -> free it
-		if (dev->can.echo_skb[dev->frn_write - 1])
-			can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
-
-		can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
-
-		dev->frn_write++;
-		if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)
-			dev->frn_write = 1;
-
-		spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
-	}
-	else {
-		kfree_skb(skb);
 	}
 
 	iowrite32(can_id, fifo_data + IXXAT_IFIFD_ID);
