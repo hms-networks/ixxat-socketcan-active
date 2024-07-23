@@ -1,5 +1,6 @@
 CAN-IB_FW_0_3_18_1_R1595.srec 
-  
- generated binary file:
+for FPGA versions < 2.x
 
- ixx_active_can.fw (size:159.184, date: 02.06.2021 08:05)
+generated binary file:
+
+ixx_active_can.fw (size:159.184, date: 02.06.2021 08:05)

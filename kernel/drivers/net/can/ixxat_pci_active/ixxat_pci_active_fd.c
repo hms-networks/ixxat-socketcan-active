@@ -34,10 +34,10 @@
 #define IFIFD_RXFIFO_IDEXT_00_17	0x1FFFF800
 #define IFIFD_RXFIFO_IDE		BIT(29)
 
-#define IFIFD_RXFIFO_DLC_S		0
-#define IFIFD_RXFIFO_FRN_S		24
-#define IFIFD_RXFIFO_IDSTD_S		0
-#define IFIFD_TXFIFO_FRN_S		24
+#define IFIFD_RXFIFO_DLC_SHIFT		0
+#define IFIFD_RXFIFO_FRN_SHIFT		24
+#define IFIFD_RXFIFO_IDSTD_SHIFT	0
+#define IFIFD_TXFIFO_FRN_SHIFT		24
 
 #define IFIFD_TXFIFO_DLC		0x0000000F
 #define IFIFD_TXFIFO_RTR		BIT(4)
@@ -195,11 +195,11 @@ static int ixxat_pci_handle_sr_canfdmsg(struct ixxat_pci_device *dev,
 {
 	u32 raw_dlc = *(u32 *)(base + IXXAT_IFIFD_DLC);
 	u32 tstamp = *(u32 *)(base + IXXAT_IFIFD_RXTIMESTAMP);
-	u8 frn = (raw_dlc & IFIFD_RXFIFO_FRN) >> IFIFD_RXFIFO_FRN_S;
+	u8 frn = (raw_dlc & IFIFD_RXFIFO_FRN) >> IFIFD_RXFIFO_FRN_SHIFT;
 
 	dev->netdev->stats.tx_packets++;
 	dev->netdev->stats.tx_bytes += can_fd_dlc2len((raw_dlc & IFIFD_RXFIFO_DLC)
-			                          >> IFIFD_RXFIFO_DLC_S);
+						  >> IFIFD_RXFIFO_DLC_SHIFT);
 
 	return ixxat_pci_handle_frn(dev, frn, tstamp);
 }
@@ -222,8 +222,7 @@ static int ixxat_pci_handle_canfdmsg(struct ixxat_pci_device *dev, void *base)
 	if (!skb)
 		return -ENOMEM;
 
-	cf->len = can_fd_dlc2len((raw_dlc & IFIFD_RXFIFO_DLC)
-			      >> IFIFD_RXFIFO_DLC_S);
+	cf->len = can_fd_dlc2len((raw_dlc & IFIFD_RXFIFO_DLC) >> IFIFD_RXFIFO_DLC_SHIFT);
 
 	/* Identifier Extension Flag */
 	if (raw_id & IFIFD_RXFIFO_IDE) {
@@ -231,8 +230,7 @@ static int ixxat_pci_handle_canfdmsg(struct ixxat_pci_device *dev, void *base)
 		cf->can_id |= ((raw_id & IFIFD_RXFIFO_IDEXT_18_28) << 18)
 			+ ((raw_id & IFIFD_RXFIFO_IDEXT_00_17) >> 11);
 	} else {
-		cf->can_id |= (raw_id & IFIFD_RXFIFO_IDSTD)
-			>> IFIFD_RXFIFO_IDSTD_S;
+		cf->can_id |= (raw_id & IFIFD_RXFIFO_IDSTD) >> IFIFD_RXFIFO_IDSTD_SHIFT;
 	}
 
 	/* Remote Transmission Request */
@@ -283,17 +281,21 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 {
 	struct ixxat_pci_device *dev = netdev_priv(netdev);
 	struct canfd_frame *cf = (struct canfd_frame *)skb->data;
-	void __iomem *fifo = dev->tx_fifo;
-	void __iomem *fifo_data;
-	void __iomem *data;
+	struct ixxat_fifo *fifo = dev->tx_fifo;
+	void __iomem *dest;
+	void __iomem *destdata;
+
 	int i;
 	bool selfReception = false;
 	bool isloopback    = false;
 	u32 can_id;
 	u32 can_dlc = 0;
-	u32 write_index = ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX);
-	u32 read_index = ioread32(fifo + IXXAT_PCI_RES_READ_IDX);
-	u32 obj_size = ioread32(fifo + IXXAT_PCI_RES_OBJ_SIZE);
+
+	u32 write_index = IX_FIFO_GET_WRITEIDX(fifo);
+	u32 read_index = IX_FIFO_GET_READIDX(fifo);
+	u32 obj_size = IX_FIFO_OBJSIZE(fifo);
+	u32 num_obj = IX_FIFO_NUMOBJS(fifo);
+
 	unsigned long spin_flags;
 	u32 intCtrlMask;
 
@@ -313,19 +315,20 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 	if (dev->frn_write == dev->frn_read || write_index == read_index)
 		return NETDEV_TX_BUSY;
 
-	fifo_data = fifo + IXXAT_PCI_RES_DATA + write_index * obj_size;
-	iowrite32(IXXAT_PCI_MSG_TYPE_IFI, fifo_data);
-	fifo_data += sizeof(u32);
+	dest = IX_FIFO_GET_DATAPTR(fifo) + write_index * obj_size;
+	iowrite32(IXXAT_PCI_MSG_TYPE_IFI, dest);
+	dest += sizeof(u32);
 
-	data = fifo_data + IXXAT_IFIFD_DATA;
+	destdata = dest + IXXAT_IFIFD_DATA;
 
-	if (cf->can_id & CAN_EFF_FLAG)
+	if (cf->can_id & CAN_EFF_FLAG) {
 		can_id = (((cf->can_id & IXXAT_PCI_SFF_ID) <<
 			   IXXAT_PCI_SFF_SHIFT) +
 			  ((cf->can_id & IXXAT_PCI_EFF_ID) >>
 			   IXXAT_PCI_EFF_SHIFT)) | IFIFD_TXFIFO_IDE;
-	else
+	} else {
 		can_id = cf->can_id & IFIFD_TXFIFO_IDSTD;
+	}
 
 	if (cf->can_id & CAN_RTR_FLAG) {
 		can_dlc |= IFIFD_TXFIFO_RTR;
@@ -336,23 +339,22 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 	}
 
 	if (dev->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
-		iowrite32(1, fifo_data + IXXAT_IFIFD_TXREPCOUNT);
+		iowrite32(1, dest + IXXAT_IFIFD_TXREPCOUNT);
 	else
-		iowrite32(0, fifo_data + IXXAT_IFIFD_TXREPCOUNT);
+		iowrite32(0, dest + IXXAT_IFIFD_TXREPCOUNT);
 
 	if (!(cf->can_id & CAN_RTR_FLAG)) {
 		if (cf->flags & CANFD_BRS)
 			can_dlc |= IFIFD_TXFIFO_EDL | IFIFD_TXFIFO_BRS;
 
 		for (i = 0; i < cf->len; i += sizeof(u32))
-			iowrite32(le32_to_cpup((__le32 *)(cf->data + i)),
-				  data + i);
+			iowrite32(le32_to_cpup((__le32 *)(cf->data + i)), destdata + i);
 	}
 
 	selfReception = ((loopMode & IX_LOOP_SELF_RX) == IX_LOOP_SELF_RX);
 	if (selfReception) {
 
-		can_dlc |= (dev->frn_write << IFIFD_TXFIFO_FRN_S) & IFIFD_TXFIFO_FRN;
+		can_dlc |= (dev->frn_write << IFIFD_TXFIFO_FRN_SHIFT) & IFIFD_TXFIFO_FRN;
 
 		isloopback = ((loopMode & IX_LOOPBACK) == IX_LOOPBACK);
 		if (isloopback) {
@@ -379,25 +381,24 @@ static int ixxat_pci_start_xmit_fd(struct sk_buff *skb,
 		netdev->stats.tx_packets += 1;
 	}
 
-	iowrite32(can_id, fifo_data + IXXAT_IFIFD_ID);
-	iowrite32(can_dlc, fifo_data + IXXAT_IFIFD_DLC);
-	iowrite32(ioread32(fifo_data + IXXAT_IFIFD_FIFOCMD) |
-			   IFIFD_R2_WR_ADD_MSG,
-		  fifo_data + IXXAT_IFIFD_FIFOCMD);
+	iowrite32(can_id, dest + IXXAT_IFIFD_ID);
+	iowrite32(can_dlc, dest + IXXAT_IFIFD_DLC);
+	iowrite32(ioread32(dest + IXXAT_IFIFD_FIFOCMD) | IFIFD_R2_WR_ADD_MSG, dest + IXXAT_IFIFD_FIFOCMD);
 
 	spin_lock_irqsave(&dev->rcv_lock, spin_flags);
-	iowrite32((write_index + 1) % ioread32(fifo + IXXAT_PCI_RES_NUM_OBJ),
-		  fifo + IXXAT_PCI_RES_WRITE_IDX);
+
+	write_index = ((write_index + 1) % num_obj);
+	IX_FIFO_SET_WRITEIDX(fifo, write_index);
+
 	if (dev->frn_write == dev->frn_read ||
-		ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX) ==
-			ioread32(fifo + IXXAT_PCI_RES_READ_IDX))
+		IX_FIFO_GET_WRITEIDX(fifo) == IX_FIFO_GET_READIDX(fifo)) {
 		netif_stop_queue(netdev);
+	}
 
 	spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
 
 	intCtrlMask =(1 << (dev->ctrl_idx +1 + 16));
-	// 0x00020000 -> ctrl 0
-	ixxat_pci_setup_altera_mailbox(dev->intf, (dev->ctrl_idx + 1), intCtrlMask);
+	ixxat_pci_write_altera_mailbox(dev->intf, (dev->ctrl_idx + 1), intCtrlMask);
 
 	return NETDEV_TX_OK;
 }

@@ -38,9 +38,9 @@
 #define IFI_R0_RD_RTR BIT(4)
 #define IFI_R0_RD_FRN 0xFF000000
 
-#define IFI_R0_DLC_S 0
-#define IFI_R0_FRN_S 24
-#define IFI_R1_IDSTD_S 0
+#define IFI_R0_DLC_SHIFT 0
+#define IFI_R0_FRN_SHIFT 24
+#define IFI_R1_IDSTD_SHIFT 0
 
 #define IFI_R0_WR_DLC 0x0000000F
 #define IFI_R0_WR_RTR BIT(4)
@@ -137,7 +137,7 @@ static int ixxat_pci_handle_sr_canmsg(struct ixxat_pci_device *dev, void *base)
 {
 	u32 reg_dlc = *(u32 *)(base + IFIREG_DLC);
 	u32 tstamp = *(u32 *)(base + IFIREG_TIMESTAMP);
-	u8 frn = (reg_dlc & IFI_R0_RD_FRN) >> IFI_R0_FRN_S;
+	u8 frn = (reg_dlc & IFI_R0_RD_FRN) >> IFI_R0_FRN_SHIFT;
 
 	dev->netdev->stats.tx_packets++;
 	dev->netdev->stats.tx_bytes += can_cc_dlc2len(reg_dlc & IFI_R0_RD_DLC);
@@ -158,14 +158,14 @@ static int ixxat_pci_handle_canmsg(struct ixxat_pci_device *dev, void *base)
 	if (!skb)
 		return -ENOMEM;
 
-	cf->can_dlc = (raw_dlc & IFI_R0_RD_DLC) >> IFI_R0_DLC_S;
+	cf->can_dlc = (raw_dlc & IFI_R0_RD_DLC) >> IFI_R0_DLC_SHIFT;
 
 	if (raw_id & IFI_R1_IDE) {
 		cf->can_id |= CAN_EFF_FLAG;
 		cf->can_id |= ((raw_id & IFI_R1_IDEXT_18_28) << 18)
-			+ ((raw_id & IFI_R1_IDEXT_00_17) >> 11);
+			   +  ((raw_id & IFI_R1_IDEXT_00_17) >> 11);
 	} else {
-		cf->can_id |= (raw_id & IFI_R1_IDSTD) >> IFI_R1_IDSTD_S;
+		cf->can_id |= (raw_id & IFI_R1_IDSTD) >> IFI_R1_IDSTD_SHIFT;
 	}
 
 	if (raw_dlc & IFI_R0_RD_RTR)
@@ -203,21 +203,23 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 {
 	struct ixxat_pci_device *dev = netdev_priv(netdev);
 	struct can_frame *cf = (struct can_frame *)skb->data;
-	void __iomem *fifo = dev->tx_fifo;
-	void __iomem *fifo_data;
-	void __iomem *data;
+	struct ixxat_fifo *fifo = dev->tx_fifo;
+	void __iomem *dest;
+	void __iomem *destdata;
+
 	int i;
 	bool selfReception = false;
 	bool isloopback    = false;
 	u32 can_id;
 	u32 can_dlc = 0;
-	volatile u32 write_index = ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX);
-	volatile u32 read_index = ioread32(fifo + IXXAT_PCI_RES_READ_IDX);
-	volatile u32 obj_size = ioread32(fifo + IXXAT_PCI_RES_OBJ_SIZE);
-	volatile u32 obj_num = ioread32(fifo + IXXAT_PCI_RES_NUM_OBJ);
+
+	u32 write_index = IX_FIFO_GET_WRITEIDX(fifo);
+	u32 read_index = IX_FIFO_GET_READIDX(fifo);
+	u32 obj_size = IX_FIFO_OBJSIZE(fifo);
+	u32 num_obj = IX_FIFO_NUMOBJS(fifo);
+
 	unsigned long spin_flags;
 	u32 intCtrlMask;
-	bool fSend = true;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	if (can_dropped_invalid_skb(netdev, skb))
@@ -236,107 +238,83 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 		/* should not occur except during restart */
 		return NETDEV_TX_BUSY;
 
-	fifo_data = fifo + IXXAT_PCI_RES_DATA + write_index * obj_size;
-	iowrite32(IXXAT_PCI_MSG_TYPE_IFI, fifo_data);
-	fifo_data += sizeof(u32);
+	dest = IX_FIFO_GET_DATAPTR(fifo) + write_index * obj_size;
+	iowrite32(IXXAT_PCI_MSG_TYPE_IFI, dest);
+	dest += sizeof(u32);
 
-	data = fifo_data + IFIREG_DATA14;
+	destdata = dest + IFIREG_DATA14;
 
-	if (cf->can_id & CAN_EFF_FLAG)
+	if (cf->can_id & CAN_EFF_FLAG) {
 		can_id = (((cf->can_id & IXXAT_PCI_SFF_ID) <<
 			   IXXAT_PCI_SFF_SHIFT) +
 			  ((cf->can_id & IXXAT_PCI_EFF_ID) >>
 			   IXXAT_PCI_EFF_SHIFT)) | IFI_R1_IDE;
-	else {
-		if ( cf->can_id == 0x800) {
-
-#if defined(CONFIG_TRACING) && defined(DEBUG)
-			volatile u32 regval = ioread32(dev->intf->reg1vadd + PCIE_ALTERALCR_A2P_INTENA);
-			volatile u32 intSR  = ioread32(dev->intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
-			ix_trace_printk (" ena:%x sr:%x\n",regval, intSR);
-#endif
-			fSend = false;
-		}
-		else if ( cf->can_id == 0x801) {
-			volatile u32 intSR  = ioread32(dev->intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
-			iowrite32(intSR, dev->intf->reg1vadd + PCIE_ALTERA_LCR_INTCSR);
-			ix_trace_printk (" reset Status sr:%x\n", intSR);
-			fSend = false;
-		}
-		else if ( cf->can_id == 0x802) {
-			iowrite32(0xFFFFFFFF, dev->intf->reg1vadd + PCIE_ALTERALCR_A2P_INTENA);
-			ix_trace_printk (" set all ints enabled\n");
-			fSend = false;
-		}
-
+	} else {
 		can_id = cf->can_id & IFI_R1_IDSTD;
 	}
 
-	if ( fSend ){
+	can_dlc = cf->can_dlc & IFI_R0_WR_DLC;
 
-		can_dlc = cf->can_dlc & IFI_R0_WR_DLC;
-
-		if (cf->can_id & CAN_RTR_FLAG) {
-			can_dlc |= IFI_R0_WR_RTR;  //Fix - RTR
-		}
-
-		if (dev->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
-			can_dlc |= IFI_R0_WR_SSM;
-
-		if (!(cf->can_id & CAN_RTR_FLAG)) {
-			for (i = 0; i < cf->can_dlc; i += sizeof(u32))
-				iowrite32(le32_to_cpup((__le32 *)(cf->data + i)),
-					data + i);
-		}
-
-		selfReception = ((loopMode & IX_LOOP_SELF_RX) == IX_LOOP_SELF_RX);
-		if (selfReception) {
-
-			can_dlc |= (dev->frn_write << IFI_R0_FRN_S) & IFI_R0_RD_FRN;
-
-			isloopback = ((loopMode & IX_LOOPBACK) == IX_LOOPBACK);
-			if (isloopback) {
-				spin_lock_irqsave(&dev->rcv_lock, spin_flags);
-
-				// if there is already a echo skb registered -> free it
-				if (dev->can.echo_skb[dev->frn_write - 1])
-					can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
-
-				can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
-
-				dev->frn_write++;
-				if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)
-					dev->frn_write = 1;
-
-				spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
-			}
-			else {
-				dev_kfree_skb(skb);
-			}
-
-		} else {
-			netdev->stats.tx_bytes += cf->can_dlc;
-			netdev->stats.tx_packets += 1;
-		}
-
-		iowrite32(can_id , fifo_data + IFIREG_IDENTIFER);
-		iowrite32(can_dlc, fifo_data + IFIREG_DLC);
-
-		spin_lock_irqsave(&dev->rcv_lock, spin_flags);
-		iowrite32 (((write_index + 1) % obj_num), fifo + IXXAT_PCI_RES_WRITE_IDX);
-
-		if (dev->frn_write == dev->frn_read ||
-			ioread32(fifo + IXXAT_PCI_RES_WRITE_IDX) ==
-				ioread32(fifo + IXXAT_PCI_RES_READ_IDX))
-			netif_stop_queue(netdev);
-
-		spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
-
-		intCtrlMask =(1 << (dev->ctrl_idx +1 + 16));
-		// 0x00020000 -> ctrl 0
-		ixxat_pci_setup_altera_mailbox(dev->intf, (dev->ctrl_idx + 1), intCtrlMask);
+	if (cf->can_id & CAN_RTR_FLAG) {
+		can_dlc |= IFI_R0_WR_RTR;  //Fix - RTR
 	}
 
+	if (dev->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
+		can_dlc |= IFI_R0_WR_SSM;
+
+	if (!(cf->can_id & CAN_RTR_FLAG)) {
+		for (i = 0; i < cf->can_dlc; i += sizeof(u32))
+			iowrite32(le32_to_cpup((__le32 *)(cf->data + i)), destdata + i);
+	}
+
+	selfReception = ((loopMode & IX_LOOP_SELF_RX) == IX_LOOP_SELF_RX);
+	if (selfReception) {
+
+		can_dlc |= (dev->frn_write << IFI_R0_FRN_SHIFT) & IFI_R0_RD_FRN;
+
+		isloopback = ((loopMode & IX_LOOPBACK) == IX_LOOPBACK);
+		if (isloopback) {
+			spin_lock_irqsave(&dev->rcv_lock, spin_flags);
+
+			// if there is already a echo skb registered -> free it
+			if (dev->can.echo_skb[dev->frn_write - 1])
+				can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
+
+			can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
+
+			dev->frn_write++;
+			if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)
+				dev->frn_write = 1;
+
+			spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
+		}
+		else {
+			dev_kfree_skb(skb);
+		}
+
+	} else {
+		netdev->stats.tx_bytes += cf->can_dlc;
+		netdev->stats.tx_packets += 1;
+	}
+
+	iowrite32(can_id , dest + IFIREG_IDENTIFER);
+	iowrite32(can_dlc, dest + IFIREG_DLC);
+
+	spin_lock_irqsave(&dev->rcv_lock, spin_flags);
+
+	write_index = ((write_index + 1) % num_obj);
+	IX_FIFO_SET_WRITEIDX(fifo, write_index);
+
+	if (dev->frn_write == dev->frn_read ||
+		IX_FIFO_GET_WRITEIDX(fifo) == IX_FIFO_GET_READIDX(fifo)) {
+		netif_stop_queue(netdev);
+	}
+
+	spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
+
+	intCtrlMask =(1 << (dev->ctrl_idx +1 + 16));
+	// 0x00020000 -> ctrl 0
+	ixxat_pci_write_altera_mailbox(dev->intf, (dev->ctrl_idx + 1), intCtrlMask);
 
 	return NETDEV_TX_OK;
 }

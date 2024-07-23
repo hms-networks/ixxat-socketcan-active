@@ -11,6 +11,7 @@ The IXXAT active PCI cards linux driver provides support for the following devic
 * IXXAT CAN-IB610/PCIe XMC (CAN FD)
 * IXXAT CAN-IB630/PCIe 104 (CAN FD)
 * IXXAT CAN-IB810/PCI  PMC (CAN FD)
+* IXXAT CAN-IB640/PCI      (CAN FD)
 
 ## Install
 

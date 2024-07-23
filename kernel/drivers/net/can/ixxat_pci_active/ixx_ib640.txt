@@ -1,0 +1,5 @@
+CAN-IB640_FW_0_3_22_0_R75.srec
+
+generated binary file:
+
+ixx_ib640_canfd.fw (size:200.892, date: 10.06.2024 15:32)

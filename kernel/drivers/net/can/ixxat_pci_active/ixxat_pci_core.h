@@ -17,7 +17,11 @@
 #ifndef IXXAT_PCI_CORE_H_
 #define IXXAT_PCI_CORE_H_
 
-#define IXXAT_FIRMWARE			"ixxat/ixx_active_can.fw"
+#include "ixxat_fifo.h"
+
+#define IXXAT_FIRMWARE_FPGA_V1		"ixxat/ixx_active_can.fw"
+#define IXXAT_FIRMWARE_FPGA_V2		"ixxat/ixx_active_can_2.fw"
+#define IXXAT_FIRMWARE_IB640		"ixxat/ixx_ib640_canfd.fw"
 
 #define IXXAT_PCI_VENDOR_ID		0x1BEE
 
@@ -32,7 +36,7 @@
 /* CAN FD */
 #define CAN_IB600_PRODUCT_ID		0x000f
 #define CAN_IB610_PRODUCT_ID		0x0018
-//#define CAN_IB640_PRODUCT_ID		0x002e
+#define CAN_IB640_PRODUCT_ID		0x002e
 #define CAN_IB800_PRODUCT_ID		0x001b
 #define CAN_IB810_PRODUCT_ID		0x001c
 
@@ -61,9 +65,22 @@
 
 #define IXXAT_PCI_RESET			0x00000001
 #define IXXAT_PCI_RESET_PERIOD		10000
-#define IXXAT_PCI_RESET_DELAY		100000
+#define IXXAT_PCI_RESET_DELAY		200000
+#define IXXAT_PCI_BOOTM_STARTUP_PERIOD	1000000
 
-#define IXXAT_PCI_ALTERA_MBX_OFF		0x800
+#define IXXAT_PCI_FIRMWARE_STARTUP_PERIOD	1000000
+
+// Boot manager mailbox start acknowledge ("BOOT")
+#define IXXAT_PCI_MBX_ACK_START_BOOT	0x544f4f42
+// Firmware mailbox start acknowledge ("FIRM")
+#define IXXAT_PCI_MBX_ACK_START_FIRM	0x4d524946
+
+#define IXXAT_PCI_ALTERA_P2A_MBX_OFF	(0x200 * 4)
+#define IXXAT_PCI_ALTERA_P2A_MBX_COUNT	8
+
+#define IXXAT_PCI_ALTERA_A2P_MBX_OFF	(0x240 * 4)
+#define IXXAT_PCI_ALTERA_A2P_MBX_COUNT	8
+
 #define IXXAT_PCI_ALTERA_ADRTRANSSTART_OFF	0x1000
 #define IXXAT_PCI_ALTERA_ADRTRANSEND_OFF	0x2000
 #define IXXAT_PCI_ALTERA_RESET_CARD_OFF		0x4000
@@ -145,23 +162,13 @@
 #define IXXAT_PCI_RESDIR_HTOD		0x0001
 #define IXXAT_PCI_RESDIR_DTOH		0x0002
 
-#define IXXAT_PCI_RES_TAG		0x00
-#define IXXAT_PCI_RES_SIZE		0x04 //C
-#define IXXAT_PCI_RES_DIR		0x08 //C
-#define IXXAT_PCI_RES_NUM_OBJ		0x0c //C
-#define IXXAT_PCI_RES_OBJ_SIZE		0x10 //C
-#define IXXAT_PCI_RES_WRITE_IDX		0x14 //C
-#define IXXAT_PCI_RES_READ_IDX		0x18 //C
-#define IXXAT_PCI_RES_DATA		0x1c //C
-#define IXXAT_PCI_RES_VER_OFF		0x10
-
+#define IXXAT_PCI_VER_SIZE		0x10
+#define IXXAT_PCI_RES_VER_OFF		IXXAT_PCI_VER_SIZE
 #define IXXAT_PCI_RES_MAX_OBJ_SIZE	252
 #define IXXAT_PCI_RES_HEADER_SIZE	28
-#define IXXAT_PCI_VER_SIZE		0x10
+
 #define IXXAT_PCI_CAN_ERROR_LEN		5
 
-// FIFO resource identifier ("FIFO")
-#define IXXAT_PCI_PCRFIFO_RES_TAG   0x4F464946
 
 /* size of available mapped DMA (after possible page shifting) */
 #define IXXAT_PCI_DMA_SIZE		0x80000
@@ -175,6 +182,9 @@
 #define IX_LOOP_SELF_RX			0x01	//enable self reception
 #define IX_LOOPBACK			0x02	//pass on message to application
 
+#define IXXAT_MAX_CANCTRL_COUNT         32
+
+
 struct ixxat_intf_info {
 	char intf_name[IXXAT_PCI_CARDNAME_SIZE];	/* device name */
 	char intf_id[IXXAT_PCI_HWSERIAL_SIZE];		/* unique device id */
@@ -182,6 +192,9 @@ struct ixxat_intf_info {
 	u32 intf_fpga_version;				/* device version of FPGA design */
 	u16 reserved;
 } __packed;
+
+#define IX_FPGAVERSION_MASK		0x00FFFFFF
+#define IX_FPGAVERSION_MAJOR_V2		0x00020000
 
 struct ixxat_intf_firmware_info {
 	u32 firmware_type;		/* type of currently running firmware */
@@ -437,14 +450,14 @@ struct ixxat_pci_interface {
 	u8 started_mask;
 	u8 handle_data;
 
-	void __iomem *cmd_tx_fifo;
-	void __iomem *cmd_rx_fifo;
-	void __iomem *cmd_dbg_fifo;
-	void __iomem *tx_fifo[4];
-	void *rx_fifo[4];
+	struct ixxat_fifo	cmd_tx_fifo;
+	struct ixxat_fifo	cmd_rx_fifo;
+	struct ixxat_fifo	cmd_dbg_fifo;
+	struct ixxat_fifo	tx_fifo[IXXAT_MAX_CANCTRL_COUNT];
+	struct ixxat_fifo	rx_fifo[IXXAT_MAX_CANCTRL_COUNT];
 
 	/* Ensure safe memory access while writing to the controller */
-	struct mutex cmd_lock;
+	struct mutex		cmd_lock;
 };
 
 /* ixxat pci adapter descriptor */
@@ -473,9 +486,8 @@ struct ixxat_pci_device {
 	u32 state;
 	u16 ctrl_idx;
 
-	void __iomem *ifi_base;
-	void __iomem *tx_fifo;
-	void *rx_fifo;
+	struct ixxat_fifo *tx_fifo;
+	struct ixxat_fifo *rx_fifo;
 
 	u8 can_mode;
 	u8 can_exmode;
@@ -503,7 +515,8 @@ void ixxat_pci_setup_cmd(struct ixxat_pci_dal_req *req, u32 req_size,
 			 struct ixxat_pci_dal_res *res, u32 res_size,
 			 u32 req_code);
 
-void ixxat_pci_setup_altera_mailbox(struct ixxat_pci_interface *intf, u16 off, u32 val);
+void ixxat_pci_write_altera_mailbox(struct ixxat_pci_interface *intf, u16 off, u32 val);
+u32 ixxat_pci_read_pc_mailbox(struct ixxat_pci_interface *intf, u16 off);
 
 int ixxat_pci_handle_cmd(struct ixxat_pci_interface *intf,
 			 struct ixxat_pci_dal_req *req,

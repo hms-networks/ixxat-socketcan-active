@@ -6,6 +6,8 @@ SRC_DIR             := $(shell pwd)/$(MOD_DIR)
 DEST_DIR            := /lib/modules/$(shell uname -r)/$(MOD_DIR)
 FW_DIR              := /lib/firmware/ixxat
 FW_FILE             := ixx_active_can.fw
+FW_FILE_V2          := ixx_active_can_2.fw
+FW_FILE_IB640       := ixx_ib640_canfd.fw
 MOD_FILE            := $(mod-name).ko
 
 #
@@ -26,6 +28,8 @@ modules_install:
 install: all
 	mkdir -p "$(FW_DIR)"
 	cp "$(SRC_DIR)/$(FW_FILE)" "$(FW_DIR)"
+	cp "$(SRC_DIR)/$(FW_FILE_V2)" "$(FW_DIR)"
+	cp "$(SRC_DIR)/$(FW_FILE_IB640)" "$(FW_DIR)"
 	install -d "$(DEST_DIR)"
 	install "$(SRC_DIR)/$(MOD_FILE)" "$(DEST_DIR)"
 	depmod -a
@@ -36,3 +40,5 @@ uninstall:
 	depmod -a
 	rm -f "$(DEST_DIR)/$(MOD_FILE)"
 	rm -f "$(FW_DIR)/$(FW_FILE)"
+	rm -f "$(FW_DIR)/$(FW_FILE_V2)"
+	rm -f "$(FW_DIR)/$(FW_FILE_IB640)"

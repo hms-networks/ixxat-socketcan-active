@@ -4,5 +4,5 @@
 #
 
 obj-$(CONFIG_CAN_IXXAT_PCI_ACTIVE) += ix_active_can.o
-ix_active_can-y = ixxat_pci_core.o ixxat_pci_active.o ixxat_pci_active_fd.o
+ix_active_can-y = ixxat_pci_core.o ixxat_pci_active.o ixxat_pci_active_fd.o ixxat_fifo.o
 

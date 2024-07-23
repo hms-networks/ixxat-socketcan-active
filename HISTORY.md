@@ -2,6 +2,32 @@
 
 ## History
 
+### 2.0.556	(2024-07-23)
+
+- add support for current firmware version 3.22.0.1670 same version as current VCI4111 driver rev 182
+  move fifo handling to separate component because new firmware uses FIFO2 communication primitive to send/receive CAN messages
+  change transmit/receive path to use either FIFO or FIFO2 depending which is detected
+  FIFO access: use double reads to catch misreads of read/write index values
+  fix loading of correct firmware depending on FPGA version (Rev 1595 for FPGA < 2.x, Rev 1670 for >= 2.x)
+- rename shift constants (use _SHIFT postfix instead of _S)
+- ixxat_fifo_write_cmd: align request to 4 byte boundary
+- replace ixxat_pci_setup_altera_mailbox() with pci_write_altera_mailbox()
+- rewrite ixxat_pci_dma_get_info() according to ECI implementation
+- rewrite ixxat_pci_mc_reset() according to ECI implementation (wait for bootmanager ACK signal)
+- fix implementation of ixxat_init_fwfifos() (enum and record only CAN specific FIFOs, skip others)
+- maintain init state during device/driver initialization and move error handling from ixxat_pci_probe() to separate function ixxat_dev_uninit()
+- rename ixxat_pci_convey_dma() to ixxat_pci_init_dma_adresstrans_table()
+- add support for IB640 devices
+- send a IXXAT_PCI_CMD_GET_DEVINFO to the device to correctly initialize IB640 devices.
+  Without this command IB640 devices sometimes have problems to handle the command fifo correctly after a cold boot (Seen on FPGA versions <= 0x01020000).
+- fix determine number of DMA page in ixxat_pci_dma_get_info()
+- fix set of address space indication flags in ixxat_pci_init_dma_adresstrans_table()
+- replace fixed msleep with firmware startup detection code (checks firmware startup for at least IXXAT_PCI_FIRMWARE_STARTUP_PERIOD)
+- uninit: remove release of memory regions from state IXXAT_PROBESTATE_DEVICE_REGISTERED as it is already done in state IXXAT_PROBESTATE_PCI_REGIONS_REQUESTED
+- unify formatting of error codes in dmesg output to hex format
+- fix error result of ixxat_init_fwfifos() in case of FIFO tag checks fail
+- ixxat_pci_probe: handle errors during DMA address table init
+
 ### 2.0.520	(2024-06-04)
 
 - kernel >= 6.1.0: use can_dev_dropped_skb() instead of can_dropped_invalid_skb() to check skb in ixxat_usb_start_xmit()

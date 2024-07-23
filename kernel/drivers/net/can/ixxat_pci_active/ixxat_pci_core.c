@@ -27,7 +27,7 @@
 MODULE_AUTHOR("HMS Technology Center Ravensburg Gmbh <socketcan@hms-networks.de>");
 MODULE_DESCRIPTION("SocketCAN driver for HMS Ixxat IB2xx, IB4xx, IB6xx, IB810 boards");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0.520-REL");
+MODULE_VERSION("2.0.556-REL");
 
 #define IX_STATISTICS_EXACT 0
 
@@ -45,7 +45,7 @@ static struct pci_device_id ixxat_pci_table[] = {
 	{ PCI_DEVICE(IXXAT_PCI_VENDOR_ID, CAN_IB230_PRODUCT_ID) },
 	{ PCI_DEVICE(IXXAT_PCI_VENDOR_ID, CAN_IB600_PRODUCT_ID) },
 	{ PCI_DEVICE(IXXAT_PCI_VENDOR_ID, CAN_IB610_PRODUCT_ID) },
-//	{ PCI_DEVICE(IXXAT_PCI_VENDOR_ID, CAN_IB640_PRODUCT_ID) },
+	{ PCI_DEVICE(IXXAT_PCI_VENDOR_ID, CAN_IB640_PRODUCT_ID) },
 	{ PCI_DEVICE(IXXAT_PCI_VENDOR_ID, CAN_IB800_PRODUCT_ID) },
 	{ PCI_DEVICE(IXXAT_PCI_VENDOR_ID, CAN_IB810_PRODUCT_ID) },
 	{ },
@@ -84,189 +84,18 @@ static int showdump(void* pbdata, int length)
 }
 #endif
 
-static int copy_todev(void* pDest, void* pSrc, int length)
+void ixxat_pci_write_altera_mailbox(struct ixxat_pci_interface *intf, u16 off, u32 val)
 {
-	int idx;
-	int numdw = length / sizeof(u32);
-	int restbytes = length - (numdw * sizeof(u32));
-
-	for (idx = 0; idx < numdw; idx++)
-	 	iowrite32(ioread32(pSrc + idx * sizeof(u32)), pDest + (idx * sizeof(u32)));
-	pDest += numdw * sizeof(u32);
-	pSrc += numdw * sizeof(u32);
-	for (idx = 0; idx < restbytes; idx++)
-		iowrite8(ioread8(pSrc + idx), pDest + idx);
-
-	return length;
-}
-
-static int copy_fromdev(void* pDest, void* pSrc, int length)
-{
-	int idx;
-	int numdw = length / sizeof(u32);
-	int restbytes = length - (numdw * sizeof(u32));
-
-	for (idx = 0; idx < numdw; idx++)
-	 	iowrite32(ioread32(pSrc + (idx * sizeof(u32))), pDest + (idx * sizeof(u32)));
-	pDest += numdw * sizeof(u32);
-	pSrc += numdw * sizeof(u32);
-	for (idx = 0; idx < restbytes; idx++)
-		*((u8*)pDest + idx) = ioread8(pSrc + idx);
-
-	return length;
-}
-
-static int ixxat_pci_send_cmd(struct ixxat_pci_interface *intf,
-				  void __iomem *tx_fifo,
-				  struct ixxat_pci_dal_req *req,
-				  struct ixxat_pci_dal_res *res)
-{
-	void __iomem *data;
-	u32 write_index = ioread32(tx_fifo + IXXAT_PCI_RES_WRITE_IDX);
-	u32 read_index = ioread32(tx_fifo + IXXAT_PCI_RES_READ_IDX);
-	u32 obj_size = ioread32(tx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
-	u32 num_obj = ioread32(tx_fifo + IXXAT_PCI_RES_NUM_OBJ);
-	u32 direction = ioread32(tx_fifo + IXXAT_PCI_RES_DIR);
-	u32 data_off = write_index * obj_size;
-	u32 size = le32_to_cpu(req->size) + sizeof(struct ixxat_pci_dal_res);
-
-	// dev_info(&intf->pdev->dev, "txf: %px os: %x #o: %x r: %x w: %x ", tx_fifo, obj_size, num_obj, read_index, write_index);
-
-	if (write_index == read_index)
-	{
-		dev_err(&intf->pdev->dev, "Error: Send cmd no buffer: widx %u ridx %u", write_index, read_index);
-		return -ENOBUFS;
-	}
-
-	if (direction != IXXAT_PCI_RESDIR_HTOD)
-	{
-		dev_err(&intf->pdev->dev, "Error: wrong fifo direction: %u exp %u", direction, IXXAT_PCI_RESDIR_HTOD);
-		return -EBADSLT;
-	}
-
-	data = tx_fifo + IXXAT_PCI_RES_DATA + data_off;
-	iowrite32(size, data);
-
-	data += sizeof(u32);
-	copy_todev(data, req, le32_to_cpu(req->size));
-
-	data += le32_to_cpu(req->size);
-	copy_todev(data, res, sizeof(struct ixxat_pci_dal_res));
-
-	iowrite32((write_index + 1) % num_obj, tx_fifo + IXXAT_PCI_RES_WRITE_IDX);
-
-	return 0;
-}
-
-static int ixxat_pci_rcv_cmd(struct ixxat_pci_interface *intf,
-			     void __iomem *rx_fifo,
-			     struct ixxat_pci_dal_req *req,
-			     struct ixxat_pci_dal_res *res)
-{
-	void __iomem *data;
-	volatile u32 num_obj;
-	volatile u32 obj_size;
-	volatile u32 read_index;
-	volatile u32 write_index;
-	ktime_t start, end;
-	size_t req_size;
-	u32 res_size;
-	u32 data_off;
-	u32 req_code;
-	u16 req_port;
-
-	// check fifo type
-	if (ioread16(rx_fifo + IXXAT_PCI_RES_DIR) != IXXAT_PCI_RESDIR_DTOH)
-		return -EBADSLT;
-
-	// read max fifo object count
-	num_obj = ioread32(rx_fifo + IXXAT_PCI_RES_NUM_OBJ);
-  
-	// read fifo object size
-	obj_size = ioread32(rx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
-
-	// get read index
-	read_index = ioread32(rx_fifo + IXXAT_PCI_RES_READ_IDX);
-
-	// get write index
-	write_index = ioread32(rx_fifo + IXXAT_PCI_RES_WRITE_IDX);
-
-	// calc request size
-	req_size = sizeof(struct ixxat_pci_dal_req);
-
-	start = ktime_get_real();
-	end = start;
-
-	while ((ktime_to_ns(end) - ktime_to_ns(start)) < IXXAT_PCI_CMD_TIMEOUT_NS) {
-		if (++read_index == num_obj)
-			read_index = 0;
-
-		if (write_index == num_obj)
-			write_index = 0;
-
-		// sleep for 10 µsec and wait for data from the interface card
-		if (read_index == write_index) {
-			usleep_range(9, 10);
-
-			read_index = ioread32(rx_fifo + IXXAT_PCI_RES_READ_IDX);
-			write_index = ioread32(rx_fifo + IXXAT_PCI_RES_WRITE_IDX);
-
-			goto cmd_continue;
-		}
-
-		data_off = read_index * obj_size;
-		data = rx_fifo + IXXAT_PCI_RES_DATA + data_off;
-
-		res_size = ioread32(data);
-
-		if (res_size != (le32_to_cpu(res->res_size) + req_size)) {
-			// incorrect answer
-			dev_err(&intf->pdev->dev, "Error: Invalid cmd size %d %d %d", res_size, (u32)(res->res_size + req_size), (u32)(le32_to_cpu(res->res_size) + req_size));
-
-			goto cmd_continue;
-		}
-
-		req_port = ioread16(data + sizeof(u32) + sizeof(req->size));
-		req_code = ioread32(data + sizeof(u32) + sizeof(req->size)
-				    + sizeof(req->port) + sizeof(req->socket));
-
-		if (req_code != le32_to_cpu(req->code)) {
-			dev_err(&intf->pdev->dev, "Error: Invalid cmd code!");
-			goto cmd_continue;
-		}
-
-		if (req_port != le16_to_cpu(req->port)) {
-			dev_err(&intf->pdev->dev,
-				"Error: Invalid cmd port index!");
-			goto cmd_continue;
-		}
-
-		copy_fromdev(res, data + sizeof(u32) + req_size, le32_to_cpu(res->res_size));
-
-		ix_trace_printk ("Req:%x ResSize %i, RetSize %i, Retcode %i \n",
-			req->code,
-			res->res_size, res->ret_size, res->ret_code);
-		if (res->ret_code)
-			dev_err(&intf->pdev->dev,
-				"Error %x: Receiving command failure",
-				res->ret_code);
-
-    	// increment read index
-		iowrite32(read_index, rx_fifo + IXXAT_PCI_RES_READ_IDX);
-
-		return le32_to_cpu(res->ret_code);
-
-cmd_continue:
-		end = ktime_get_real();
-	}
-
-	return -ENODATA;
-}
-
-void ixxat_pci_setup_altera_mailbox(struct ixxat_pci_interface *intf, u16 off, u32 val )
-{
-	void __iomem *mbx = intf->reg1vadd + IXXAT_PCI_ALTERA_MBX_OFF;
+	WARN_ON(off >= IXXAT_PCI_ALTERA_P2A_MBX_COUNT);
+	void __iomem *mbx = intf->reg1vadd + IXXAT_PCI_ALTERA_P2A_MBX_OFF;
 	iowrite32( val, mbx + off * sizeof(u32));
+}
+
+u32 ixxat_pci_read_pc_mailbox(struct ixxat_pci_interface *intf, u16 off)
+{
+	WARN_ON(off >= IXXAT_PCI_ALTERA_A2P_MBX_COUNT);
+	void __iomem *mbx = intf->reg1vadd + IXXAT_PCI_ALTERA_A2P_MBX_OFF;
+	return ioread32(mbx + off * sizeof(u32));
 }
 
 void ixxat_pci_setup_cmd(struct ixxat_pci_dal_req *req, u32 req_size,
@@ -289,15 +118,15 @@ int ixxat_pci_handle_cmd(struct ixxat_pci_interface *intf,
 {
 	int err;
 
-	err = ixxat_pci_send_cmd(intf, intf->cmd_tx_fifo, req, res);
+	err = ixxat_fifo_write_cmd(intf, &intf->cmd_tx_fifo, req, res);
 	if (err) {
 		dev_err(&intf->pdev->dev, "Error %x: Send cmd %x failed", err, req->code);
 		goto fail;
 	}
 
-	ixxat_pci_setup_altera_mailbox(intf, 0, 0xFFFFFFFF); // write to mailbox 0
+	ixxat_pci_write_altera_mailbox(intf, 0, 0xFFFFFFFF); // write to mailbox 0
 
-	err = ixxat_pci_rcv_cmd(intf, intf->cmd_rx_fifo, req, res);
+	err = ixxat_fifo_read_cmd(intf, &intf->cmd_rx_fifo, req, res);
 	if (err) {
 		dev_err(&intf->pdev->dev, "Error %x: Receive cmd failed", err);
 		goto fail;
@@ -476,6 +305,9 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 	intf->memadd = pci_resource_start(pdev, 2);
 	intf->memlen = pci_resource_len(pdev, 2);
 
+	// dev_info(&pdev->dev, "reg1add: %llx, len 0x%lx", intf->reg1add, intf->reg1len);
+	// dev_info(&pdev->dev, "memadd : %llx, len 0x%lx", intf->memadd , intf->memlen);
+
 	intf->reg1vadd = ioremap(intf->reg1add, intf->reg1len);
 	if (!intf->reg1vadd) {
 		dev_err(&pdev->dev, "Error: reg1vadd ioremap_nocache failed\n");
@@ -491,7 +323,7 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 	intf->addmemlen = IXXAT_PCI_ADDMEM_LEN;
 	intf->dmalen = IXXAT_PCI_DMA_LEN;
 
-    intf->dmavadd = dma_alloc_coherent( &pdev->dev, intf->dmalen, &intf->dmaadd, GFP_KERNEL|GFP_DMA);
+	intf->dmavadd = dma_alloc_coherent( &pdev->dev, intf->dmalen, &intf->dmaadd, GFP_KERNEL|GFP_DMA);
 
 	if (!intf->dmavadd) {
 		dev_err(&pdev->dev, "Error: Allocating dmavadd failed\n");
@@ -510,7 +342,7 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 		goto release_irq;
 	}
 
-	ix_trace_printk ("<< ixxat_pci_register_dev \n");
+	ix_trace_printk ("<< ixxat_pci_register_dev: success\n");
 	return 0;
 
 release_irq:
@@ -518,14 +350,14 @@ release_irq:
 	pci_free_irq_vectors(intf->pdev);
 	intf->addmemvadd = NULL;
 release_addmem:
-    dma_free_coherent(&pdev->dev, intf->dmalen, intf->dmavadd, intf->dmaadd);
+	dma_free_coherent(&pdev->dev, intf->dmalen, intf->dmavadd, intf->dmaadd);
 release_dma:
 	iounmap(intf->memvadd);
 release_memreg:
 	iounmap(intf->reg1vadd);
 release_reg1:
 
-	ix_trace_printk ("<< ixxat_pci_register_dev \n");
+	ix_trace_printk ("<< ixxat_pci_register_dev: error: 0x%x\n", err);
 	return err;
 }
 
@@ -537,6 +369,8 @@ static int ixxat_pci_test_cmd(struct ixxat_pci_interface *intf)
 	const u32 res_size = sizeof(cmd->res) + sizeof(cmd->res_data);
 	const u32 req_size = cmd_size - res_size;
 	const u32 req_code = IXXAT_PCI_CMD_LOOPBACK;
+
+	ix_trace_printk(">> ixxat_pci_test_cmd\n");
 
 	cmd = kmalloc(cmd_size, GFP_KERNEL);
 	if (!cmd)
@@ -631,14 +465,27 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 	const u32 req_code = IXXAT_PCI_CMD_WRITE_BLOCK;
 	void * pFw;
 	u32 loopCnt = 0;
+	const char* firmwarefile;
 
 	res = kmalloc(res_size, GFP_KERNEL);
 	if (!res)
 		return -ENOMEM;
 
-	err = request_firmware(&fw, IXXAT_FIRMWARE, &pdev->dev);
+	firmwarefile = IXXAT_FIRMWARE_FPGA_V1;
+	if (pdev->device == CAN_IB640_PRODUCT_ID) {
+		firmwarefile = IXXAT_FIRMWARE_IB640;
+	}
+	else
+	{
+		if ((intf->dev_info.intf_fpga_version & IX_FPGAVERSION_MASK) >= IX_FPGAVERSION_MAJOR_V2) {
+			firmwarefile = IXXAT_FIRMWARE_FPGA_V2;
+		}
+	}
+	dev_info(&intf->pdev->dev, "FPGA version: 0x%08x, use firmware: %s", intf->dev_info.intf_fpga_version, firmwarefile);
+
+	err = request_firmware(&fw, firmwarefile, &pdev->dev);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %d: Request fw failed", err);
+		dev_err(&intf->pdev->dev, "Error %x: Request fw failed", err);
 	} else {
 		pFw = (void *) fw->data;
 		hdr = (struct ixxat_pci_fwHdr *) (fw->data);
@@ -654,7 +501,7 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 			if ((addr==0)&&(len==0))
 				break;
 
-			ix_trace_printk ("adr %08x, len:%04x, data %02x %02x \n", addr, len, data[0], data[1] );
+			// ix_trace_printk("adr %08x, len:%04x, data %02x %02x \n", addr, len, data[0], data[1] );
 
 			req_size = len + sizeof(req->dal_req)
 					+ sizeof(req->addr);
@@ -688,7 +535,7 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 			err = ixxat_pci_handle_cmd(intf, &req->dal_req, &res->dal_res);
 			if (err) {
 				dev_err(&intf->pdev->dev,
-					"Error %d: Upload fw failed %d\n", err, i);
+					"Error %x: Upload fw failed %d\n", err, i);
 
 				kfree(req);
 				req = NULL;
@@ -739,7 +586,7 @@ static int ixxat_pci_start_fw(struct ixxat_pci_interface *intf)
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err)
-			dev_err(&intf->pdev->dev, "Error %d: Start fw failed\n", err);
+			dev_err(&intf->pdev->dev, "Error %x: Start fw failed\n", err);
 
 
 		kfree(cmd);
@@ -773,9 +620,11 @@ static int ixxat_pci_AdrTableSize(struct ixxat_pci_interface *intf, u32 * mem_le
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err)
-			dev_err(&intf->pdev->dev, "Error %d: query adr table size failed\n", err);
+		{
+			dev_err(&intf->pdev->dev, "Error %x: query adr table size failed\n", err);
+		}
 		else {
-			if ( mem_len)
+			if (mem_len)
 				*mem_len = cmd->mem_size;
 		}
 
@@ -816,8 +665,7 @@ static int ixxat_pci_AdrTable_Establish (struct ixxat_pci_interface *intf, u32 m
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err)
-			dev_err(&intf->pdev->dev, "Error %d: query adr table size failed\n", err);
-
+			dev_err(&intf->pdev->dev, "Error %x: establish adr table failed\n", err);
 
 		kfree(cmd);
 		mutex_unlock(&intf->cmd_lock);
@@ -829,36 +677,51 @@ static int ixxat_pci_AdrTable_Establish (struct ixxat_pci_interface *intf, u32 m
 static void ixxat_pci_dma_get_info(struct ixxat_pci_interface *intf,
 				   u32 *page_sz, u16 *page_cnt)
 {
-	u16 entry;
-	u16 entry_size = sizeof(u32) * 2;
-	u32 adr_start = IXXAT_PCI_ALTERA_ADRTRANSSTART_OFF;
-	u32 adr_end = IXXAT_PCI_ALTERA_ADRTRANSEND_OFF - entry_size;
-	u16 max_entry_num = (u16)((adr_end - adr_start) / entry_size);
-	u32 val;
+	const u16 entry_size = sizeof(u32) * 2;
+	const u32 adr_start = IXXAT_PCI_ALTERA_ADRTRANSSTART_OFF;
+	const u32 adr_end = IXXAT_PCI_ALTERA_ADRTRANSEND_OFF - entry_size;
+	const u16 max_entry_num = (u16)((adr_end - adr_start) / entry_size);
+	const u32 testpattern = 0xCAFEBABE;
+	void __iomem * adr_trans_first = intf->reg1vadd + adr_start;
+
 	void __iomem *adr_trans;
-	void __iomem *adr_trans_first;
+	u16 entry;
+	u32 val;
 
-	adr_trans_first = intf->reg1vadd + adr_start;
+	// determine adress translation table size and page size according to 
+	// Cyclone V Avalon Memory Mapped (Avalon-MM) Interface for PCIe Solutions User Guide
 
+	// part 1: determine page size
 	iowrite32(IXXAT_PCI_DMA_ADD_LOW, adr_trans_first);
 	iowrite32(IXXAT_PCI_DMA_ADD_HIGH, adr_trans_first + sizeof(u32));
-
 	val = ioread32(adr_trans_first);
 	*page_sz = ~val + 1;
+	ix_trace_printk("page size: 0x%0x\n", *page_sz);
 
+	// part 2: determine number of entries
+
+	// write test pattern to first table entry
+	iowrite32(0, adr_trans_first);
+	iowrite32(testpattern, adr_trans_first + sizeof(u32));
+
+	// find first mirrored table entry to determine table size
 	*page_cnt = max_entry_num;
 	for (entry = 1; entry < max_entry_num; entry++) {
-		adr_trans = intf->reg1vadd + adr_start + entry * entry_size;
+		adr_trans = adr_trans_first + entry * entry_size;
 
-		if (ioread32(adr_trans + sizeof(u32)) != 0) {
+		if (ioread32(adr_trans + sizeof(u32)) == testpattern) {
+			ix_trace_printk("IXX: page_cnt %i\n", entry);
 			*page_cnt = entry;
 			break;
 		}
 
+		// initialize all valid table entries to reset values.
+		// entries which addresses non existing physical pages will cause PCIe transaction errors.
 		iowrite32(0, adr_trans);
 		iowrite32(0, adr_trans + sizeof(u32));
 	}
 
+	// reset test pattern in first entry
 	iowrite32(0, adr_trans_first);
 	iowrite32(0, adr_trans_first + sizeof(u32));
 }
@@ -867,27 +730,51 @@ static int ixxat_pci_mc_reset(struct ixxat_pci_interface *intf)
 {
 	void __iomem *reset = intf->reg1vadd + IXXAT_PCI_ALTERA_RESET_CARD_OFF;
 	u32 period = IXXAT_PCI_RESET_PERIOD / 100;
-	u8 reset_done = 0;
+	u32 reset_set = 0;
+	int res = 0;
 
-	// Reset Device
+	// reset device
 	iowrite32(ioread32(reset) | IXXAT_PCI_RESET, reset);
 
-	// Hold reset up to reset hold time
+	ix_trace_printk("IXX: reset device\n");
+
+	// hold reset up to reset hold time
 	do {
 		usleep_range(99, 100);
-		reset_done = ioread32(reset) & IXXAT_PCI_RESET;
-	} while (reset_done && period--);
+		reset_set = ioread32(reset) & IXXAT_PCI_RESET;
+	} while (reset_set && period--);
 
-	if (reset_done)
+	ix_trace_printk("IXX: after reset hold\n");
+
+	// release reset signal if necessary
+	if (reset_set)
 		iowrite32(ioread32(reset) & ~IXXAT_PCI_RESET, reset);
+
+	ix_trace_printk("IXX: after release reset\n");
 
 	// Delay after reset in us
 	msleep(IXXAT_PCI_RESET_DELAY / 1000);
 
-	return 0;
+	// Wait here until board switches to bootmanager or timeout occurs
+	res = -1;  // timeout
+	period = IXXAT_PCI_BOOTM_STARTUP_PERIOD / 100;
+	do
+	{
+		if (IXXAT_PCI_MBX_ACK_START_BOOT == ixxat_pci_read_pc_mailbox(intf, 0))
+		{
+			ix_trace_printk("IXX: bootmgr detected\n");
+			res = 0;
+			break;
+		}
+		usleep_range(99, 100);
+	} while (period--);
+
+	ix_trace_printk("IXX: after bootmgr startup\n");
+
+	return res;
 }
 
-static int ixxat_pci_convey_dma(struct ixxat_pci_interface *intf, u8 enable)
+static int ixxat_pci_init_dma_adresstrans_table(struct ixxat_pci_interface *intf, u8 enable)
 {
 	int i;
 	void __iomem *lcr_adr_trans;
@@ -895,33 +782,49 @@ static int ixxat_pci_convey_dma(struct ixxat_pci_interface *intf, u8 enable)
 	u16 page_cnt;
 	u32 dma_high_addr;
 	u32 dma_low_addr;
+	u32 dma_adrspace_ind = 0;
 	dma_addr_t dma_phys_addr = intf->dmaadd;
 
 	lcr_adr_trans = intf->reg1vadd + IXXAT_PCI_ALTERA_ADRTRANSSTART_OFF;
 
-	// ixxat_pci_mc_reset(intf);
-
 	ixxat_pci_dma_get_info(intf, &page_sz, &page_cnt);
 
-	/* min verwendet typeof() welches dynamisch zur Laufzeit einen Datentyp
-	 * setzt => statisches Analysetool erkennt void und meldet Fehler
-	 */
-	if (enable)
+	if (enable) {
 		page_cnt = min(page_cnt, (u16)(IXXAT_PCI_DMA_SIZE / page_sz));
-	else
-		dma_phys_addr = 0;
+		
+		for (i = 0; i < page_cnt; i++) {
+			dma_high_addr = dma_phys_addr >> IXXAT_PCI_DMA_OFFSET_HIGH;
+			dma_low_addr = (dma_phys_addr & IXXAT_PCI_DMA_ADD_LOW);
 
-	for (i = 0; i < page_cnt; i++) {
-		dma_high_addr = dma_phys_addr >> IXXAT_PCI_DMA_OFFSET_HIGH;
-		dma_low_addr = (dma_phys_addr & IXXAT_PCI_DMA_ADD_LOW);
+			// determine address space indication flags
+			// 0 = Memory Space, 32-bit PCI Express address.
+			// 32-bit header is generated. Address bits 63:32 of the
+			// translation table entries are ignored.
+			// address bit 63:32 of the translation table are ignored
+			dma_adrspace_ind = 0;
+			if (dma_high_addr) {
+				// 1 = Memory space, 64-bit PCI Express address.
+				// 64-bit address header is generated.
+				dma_adrspace_ind = 1;
+			}
 
-		iowrite32(dma_low_addr, lcr_adr_trans);
-		lcr_adr_trans += sizeof(u32);
-		iowrite32(dma_high_addr, lcr_adr_trans);
-		lcr_adr_trans += sizeof(u32);
+			dma_low_addr &= ~0x3;
+			dma_low_addr |= dma_adrspace_ind;
 
-		if (enable)
+			iowrite32(dma_low_addr, lcr_adr_trans);
+			lcr_adr_trans += sizeof(u32);
+			iowrite32(dma_high_addr, lcr_adr_trans);
+			lcr_adr_trans += sizeof(u32);
+
 			dma_phys_addr += page_sz;
+		}
+	} else {
+		for (i = 0; i < page_cnt; i++) {
+			iowrite32(0, lcr_adr_trans);
+			lcr_adr_trans += sizeof(u32);
+			iowrite32(0, lcr_adr_trans);
+			lcr_adr_trans += sizeof(u32);
+		}
 	}
 
 	return 0;
@@ -1076,8 +979,7 @@ static int ixxat_pci_handle_status(struct ixxat_pci_device *dev,
 		spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
 		break;
 	default:
-		netdev_err(netdev, "Error: Unhandled can status %d\n",
-			   new_state);
+		netdev_err(netdev, "Error: Unhandled can status %d\n", new_state);
 		break;
 	}
 
@@ -1117,9 +1019,7 @@ static int ixxat_pci_handle_vci_msg(struct ixxat_pci_device *dev, void *data)
 		ret = 1;
 		break;
 	default:
-		netdev_err(dev->netdev,
-			   "Unhandled rec type 0x%02x (%d): ignored\n",
-			   msg_type, msg_type);
+		netdev_err(dev->netdev, "Unhandled rec type 0x%02x (%d): ignored\n", msg_type, msg_type);
 		break;
 	}
 
@@ -1133,33 +1033,36 @@ static int ixxat_pci_handle_vci_msg(struct ixxat_pci_device *dev, void *data)
 
 static int ixxat_pci_handle_devmsg(struct ixxat_pci_device *dev)
 {
-	void *fifo = dev->rx_fifo;
-	void *ifi_base;
-	volatile u32 read_index = (*(u32 *)(fifo + IXXAT_PCI_RES_READ_IDX)) + 1;
-	volatile u32 write_index = *(u32 *)(fifo + IXXAT_PCI_RES_WRITE_IDX);
-	u32 obj_size = *(u32 *)(fifo + IXXAT_PCI_RES_OBJ_SIZE);
+	struct ixxat_fifo* fifo = fifo = dev->rx_fifo;
+	void *src;
+
+	u32 read_index = IX_FIFO_GET_READIDX(fifo) + 1;
+	u32 write_index = IX_FIFO_GET_WRITEIDX(fifo);
+	u32 num_obj = IX_FIFO_NUMOBJS(fifo);
+	u32 obj_size = IX_FIFO_OBJSIZE(fifo);
 	u32 ret = 0;
 	u32 msg_type;
 
 	ix_trace_printk (">> %i) ixxat_pci_handle_devmsg \n", dev->ctrl_idx);
 
-	if (read_index == *(u32 *)(fifo + IXXAT_PCI_RES_NUM_OBJ))
+	if (read_index == num_obj)
 		read_index = 0;
 
 	if (read_index != write_index) {
-		ifi_base = fifo + IXXAT_PCI_RES_DATA + read_index * obj_size;
-		msg_type = *(u32 *)(ifi_base);
-		ifi_base += sizeof(u32);
+
+		src = IX_FIFO_GET_DATAPTR(fifo) + read_index * obj_size;
+		msg_type = *(u32 *)(src);
+		src += sizeof(u32);
 
 		ix_trace_printk ("-- message read %i,write %i, type %i \n", read_index, write_index, msg_type);
 
 		switch (msg_type) {
 		case IXXAT_PCI_MSG_TYPE_IFI:
-			ret = dev->adapter->handle_msg(dev, ifi_base);
+			ret = dev->adapter->handle_msg(dev, src);
 
 			break;
 		case IXXAT_PCI_MSG_TYPE_VCI:
-			ret = ixxat_pci_handle_vci_msg(dev, ifi_base);
+			ret = ixxat_pci_handle_vci_msg(dev, src);
 			break;
 		default:
 			netdev_warn(dev->netdev, "Unknown message received");
@@ -1167,11 +1070,11 @@ static int ixxat_pci_handle_devmsg(struct ixxat_pci_device *dev)
 			break;
 		}
 
-		if (*(u32 *)(fifo + IXXAT_PCI_RES_READ_IDX) + 1
-			== *(u32 *)(fifo + IXXAT_PCI_RES_NUM_OBJ))
-			*(u32 *)(fifo + IXXAT_PCI_RES_READ_IDX) = 0;
-		else
-			*(u32 *)(fifo + IXXAT_PCI_RES_READ_IDX) += 1;
+		if (read_index == num_obj) {
+			IX_FIFO_SET_READIDX(fifo, 0);
+		} else {
+			IX_FIFO_SET_READIDX(fifo, read_index);
+		}
 	}
 	else {
 		ix_trace_printk ("-- no message read %i, write %i \n", read_index, write_index);
@@ -1185,8 +1088,6 @@ static int ixxat_pci_napi_rx_poll(struct napi_struct *napi, int quota)
 {
 	volatile u32 read_index;
 	volatile u32 write_index;
-	void *rx_fifo;
-	void __iomem *tx_fifo;
 	unsigned long spin_flags;
 	int nxpackets = 0;
 	struct ixxat_pci_device *dev = netdev_priv(napi->dev);
@@ -1194,16 +1095,17 @@ static int ixxat_pci_napi_rx_poll(struct napi_struct *napi, int quota)
 	u32 intCtrlMask = 0;
 	u32 loopExit = 0;
 
+	u32 num_rxobj = IX_FIFO_NUMOBJS(dev->rx_fifo);
+
 	ix_trace_printk (">> %i) ixxat_pci_napi_rx_poll \n", dev->ctrl_idx);
 
 	while ((nxpackets < quota)&&(0 == loopExit)) {
 
-		rx_fifo = dev->rx_fifo;
-		read_index = (*(u32 *)(rx_fifo + IXXAT_PCI_RES_READ_IDX)) + 1;
-		if (read_index == *(u32 *)(rx_fifo + IXXAT_PCI_RES_NUM_OBJ))
+		read_index = IX_FIFO_GET_READIDX(dev->rx_fifo) + 1;
+		if (read_index == num_rxobj)
 			read_index = 0;
 
-		write_index = *(u32 *)(rx_fifo + IXXAT_PCI_RES_WRITE_IDX);
+		write_index = IX_FIFO_GET_WRITEIDX(dev->rx_fifo);
 
 		if (read_index == write_index ||
 		    !(dev->intf->started_mask & (0x01 << dev->ctrl_idx)))
@@ -1220,11 +1122,8 @@ static int ixxat_pci_napi_rx_poll(struct napi_struct *napi, int quota)
 
 	spin_lock_irqsave(&dev->rcv_lock, spin_flags);
 	if (dev->tx_fifo) {
-		tx_fifo = dev->tx_fifo;
-
-		if (ioread32(tx_fifo + IXXAT_PCI_RES_READ_IDX) !=
-		    ioread32(tx_fifo + IXXAT_PCI_RES_WRITE_IDX) &&
-		    dev->frn_write != dev->frn_read &&
+		if ((IX_FIFO_GET_READIDX(dev->tx_fifo) != IX_FIFO_GET_WRITEIDX(dev->tx_fifo)) &&
+		    (dev->frn_write != dev->frn_read) &&
 		    netif_queue_stopped(dev->netdev)) {
 			netif_wake_queue(dev->netdev);
 		}
@@ -1269,7 +1168,7 @@ static int ixxat_pci_get_intf_caps(struct ixxat_pci_interface *intf,
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err) {
-			dev_err(&intf->pdev->dev, "Error %d: Get caps failed\n", err);
+			dev_err(&intf->pdev->dev, "Error %x: Get caps failed\n", err);
 		} else {
 			memcpy(intf_caps, &cmd->intf_caps, sizeof(cmd->intf_caps));
 			intf_caps->bus_ctrl_count = cmd->intf_caps.bus_ctrl_count;
@@ -1313,7 +1212,7 @@ static int ixxat_pci_get_intf_info(struct ixxat_pci_interface *intf,
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err) {
-			dev_err(&intf->pdev->dev, "Error %d: Get info failed\n", err);
+			dev_err(&intf->pdev->dev, "Error %x: Get info failed\n", err);
 		} else {
 			err = le32_to_cpu(cmd->res.ret_code);
 			if (dev_info)
@@ -1358,7 +1257,7 @@ static int ixxat_pci_get_firmware_info(struct ixxat_pci_interface *intf,
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err) {
-			dev_err(&intf->pdev->dev, "Error %d: Get info failed\n", err);
+			dev_err(&intf->pdev->dev, "Error %x: Get info failed\n", err);
 		} else {
 			err = le32_to_cpu(cmd->res.ret_code);
 			if (fw_info)
@@ -1403,7 +1302,7 @@ static int ixxat_pci_get_firmware_info2(struct ixxat_pci_interface *intf,
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err) {
-			dev_err(&intf->pdev->dev, "Error %d: Get info failed\n", err);
+			dev_err(&intf->pdev->dev, "Error %x: Get info failed\n", err);
 		} else {
 			err = le32_to_cpu(cmd->res.ret_code);
 			if (fw_info)
@@ -1450,7 +1349,7 @@ static int ixxat_pci_start_ctrl(struct ixxat_pci_device *dev, u32 *time_ref)
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err) {
-			dev_err(&intf->pdev->dev, "Error %d: Start ctrl failed\n", err);
+			dev_err(&intf->pdev->dev, "Error %x: Start ctrl failed\n", err);
 		} else {
 			if (time_ref)
 				*time_ref = le32_to_cpu(cmd->time);
@@ -1489,7 +1388,7 @@ static int ixxat_pci_stop_ctrl(struct ixxat_pci_device *dev)
 	} else {
 		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
 		if (err)
-			dev_err(&intf->pdev->dev, "Error %d: Stop ctrl failed\n", err);
+			dev_err(&intf->pdev->dev, "Error %x: Stop ctrl failed\n", err);
 		else
 			dev->can.state = CAN_STATE_STOPPED;
 
@@ -1847,7 +1746,7 @@ static int ixxat_pci_open(struct net_device *netdev)
 
 	err = ixxat_pci_start(dev);
 	if (err) {
-		netdev_err(netdev, "Error %d: Couldn't start device.\n", err);
+		netdev_err(netdev, "Error %x: Couldn't start device.\n", err);
 		close_candev(netdev);
 		return err;
 	}
@@ -1873,8 +1772,7 @@ static int ixxat_pci_stop(struct net_device *netdev)
 
 		err = ixxat_pci_stop_ctrl(dev);
 		if (err)
-			netdev_warn(netdev, "Error %d: Cannot stop device\n",
-				    err);
+			netdev_warn(netdev, "Error %x: Cannot stop device\n", err);
 
 		napi_disable(&dev->napi);
 
@@ -1956,7 +1854,7 @@ static struct ixxat_pci_adapter *ixxat_pci_get_adapter(const u16 id)
 		return &can_adapter;
 	case CAN_IB600_PRODUCT_ID:
 	case CAN_IB610_PRODUCT_ID:
-//	case CAN_IB640_PRODUCT_ID:
+	case CAN_IB640_PRODUCT_ID:
 	case CAN_IB800_PRODUCT_ID:
 	case CAN_IB810_PRODUCT_ID:
 		return &can_fd_adapter;
@@ -1965,104 +1863,90 @@ static struct ixxat_pci_adapter *ixxat_pci_get_adapter(const u16 id)
 	}
 }
 
-static int ixxat_init_cmdfifo ( struct ixxat_pci_interface *intf, u32 * pdwOffset )
+static int ixxat_init_cmdfifo(struct ixxat_pci_interface *intf)
 {
-	u32 obj_size = 0;
-	u32 obj_num = 0;
-	u32 data_off = 0;
+	u32 offset = IXXAT_PCI_RES_VER_OFF;
 
 	// command Tx
-	intf->cmd_tx_fifo = intf->memvadd + IXXAT_PCI_RES_VER_OFF;
-
-	obj_size = ioread32(intf->cmd_tx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
-	obj_num = ioread32(intf->cmd_tx_fifo + IXXAT_PCI_RES_NUM_OBJ);
-	data_off = obj_size * obj_num;
-
-	ix_trace_printk ("cmdFifo Tx %p, size:%i, num, %i\n", intf->cmd_tx_fifo, obj_size, obj_num);
+	ixxat_fifo_init(&intf->cmd_tx_fifo, intf->memvadd + offset, "cmdFifoTx", -1);
+	dev_info(&intf->pdev->dev, "cmdFifo Tx, size:%u, numobj: %u, restag: 0x%08x\n"
+		, IX_FIFO_OBJSIZE(&intf->cmd_tx_fifo), IX_FIFO_NUMOBJS(&intf->cmd_tx_fifo), IX_FIFO_RESTAG(&intf->cmd_tx_fifo));
+	offset += IX_FIFO_RESSIZE(&intf->cmd_tx_fifo);
 
 	// command Rx
-	intf->cmd_rx_fifo = intf->cmd_tx_fifo + IXXAT_PCI_RES_HEADER_SIZE + data_off;
-	obj_size = ioread32(intf->cmd_rx_fifo + IXXAT_PCI_RES_OBJ_SIZE);
-	obj_num = ioread32(intf->cmd_rx_fifo + IXXAT_PCI_RES_NUM_OBJ);
-	data_off = obj_size * obj_num;
-	ix_trace_printk ("cmdFifo Rx %p, size:%i, num, %i\n", intf->cmd_rx_fifo, obj_size, obj_num);
+	ixxat_fifo_init(&intf->cmd_rx_fifo, intf->memvadd + offset, "cmdFifo Rx", -1);
+	dev_info(&intf->pdev->dev, "cmdFifo Rx, size:%u, numobj: %u, restag: 0x%08x\n"
+		, IX_FIFO_OBJSIZE(&intf->cmd_rx_fifo), IX_FIFO_NUMOBJS(&intf->cmd_rx_fifo), IX_FIFO_RESTAG(&intf->cmd_rx_fifo));
+	offset += IX_FIFO_RESSIZE(&intf->cmd_rx_fifo);
 
-	intf->cmd_dbg_fifo = intf->cmd_rx_fifo + IXXAT_PCI_RES_HEADER_SIZE + data_off;
-	obj_size = ioread32(intf->cmd_dbg_fifo + IXXAT_PCI_RES_OBJ_SIZE);
-	obj_num = ioread32(intf->cmd_dbg_fifo + IXXAT_PCI_RES_NUM_OBJ);
-	data_off = obj_size * obj_num;
-	ix_trace_printk ("dbgFifo Rx %p, size:%i, num, %i\n", intf->cmd_dbg_fifo, obj_size, obj_num);
+	ixxat_fifo_init(&intf->cmd_dbg_fifo, intf->memvadd + offset, "dbgFifo Rx", -1);
+	dev_info(&intf->pdev->dev, "dbgFifo Rx, size:%u, numobj: %u, restag: 0x%08x\n"
+		, IX_FIFO_OBJSIZE(&intf->cmd_dbg_fifo), IX_FIFO_NUMOBJS(&intf->cmd_dbg_fifo), IX_FIFO_RESTAG(&intf->cmd_dbg_fifo));
+	offset += IX_FIFO_RESSIZE(&intf->cmd_dbg_fifo);
 
-	if ( pdwOffset )
-		*pdwOffset = data_off;
-
-	return 0;
+	return offset;
 }
 
-static int ixxat_init_fwfifos ( struct ixxat_pci_interface *intf, u8 maxCtrl )
+static int ixxat_init_fwfifos(struct ixxat_pci_interface *intf, const struct ixxat_intf_caps *intf_caps)
 {
-	u32 obj_size = 0;
-	u32 obj_num = 0;
-	u32 obj_tag = 0;
-	u32 data_off = 0;
-	int ctrlNo=0;
-	u32 memOffset;
+	int i;
+	u32 restag;
+	int ctrlNo = 0;
+	int res = 0;
 
-	ixxat_init_cmdfifo ( intf, &data_off );
+	u32 tx_offset = IXXAT_PCI_RES_VER_OFF
+			+ IX_FIFO_RESSIZE(&intf->cmd_tx_fifo)
+			+ IX_FIFO_RESSIZE(&intf->cmd_rx_fifo)
+			+ IX_FIFO_RESSIZE(&intf->cmd_dbg_fifo);
+	// u32 tx_offset = ixxat_init_cmdfifo(intf);
+	u32 rx_offset = 0;
 
-	ctrlNo=0;
+	for (i = 0; i < intf_caps->bus_ctrl_count; i++) {
+		if (IXXAT_PCI_BUS_TYPE(intf_caps->bus_ctrl_types[i]) == IXXAT_PCI_BUS_CAN) {
 
-	while (ctrlNo < maxCtrl) {
-		if ( ctrlNo == 0) {
-			intf->tx_fifo[ctrlNo] = intf->cmd_dbg_fifo + IXXAT_PCI_RES_HEADER_SIZE + data_off;
+			if (ctrlNo >= IXXAT_MAX_CANCTRL_COUNT) {
+				dev_err(&intf->pdev->dev, "device has more can controllers than driver supports. Skipping rest from controller %u\n", ctrlNo);
+				break;
+			}
+
+			// init tx fifo
+			// printk("IXX: tx_offset = %x", tx_offset);
+			ixxat_fifo_init(&intf->tx_fifo[ctrlNo], intf->memvadd + tx_offset, "can Tx", ctrlNo);
+			tx_offset += IX_FIFO_RESSIZE(&intf->tx_fifo[ctrlNo]);
+
+			restag = IX_FIFO_RESTAG(&intf->tx_fifo[ctrlNo]);
+			dev_info(&intf->pdev->dev, "can%i Tx size:%u, numobjs: %u, restag: 0x%08x\n", ctrlNo, IX_FIFO_OBJSIZE(&intf->tx_fifo[ctrlNo]), IX_FIFO_NUMOBJS(&intf->tx_fifo[ctrlNo]), restag);
+
+			if (IXXAT_FIFO2_RES_TAG == restag) {
+			} else if (IXXAT_FIFO_RES_TAG == restag) {
+			} else {
+				dev_err(&intf->pdev->dev, "Error: Unexpected tx fifo[%d] resource tag: 0x%08x", ctrlNo, restag);
+				res = -ENOBUFS;
+			}
+
+			// init rx fifo
+			ixxat_fifo_init(&intf->rx_fifo[ctrlNo], intf->dmavadd + rx_offset, "can Rx", ctrlNo);
+			rx_offset += IX_FIFO_RESSIZE(&intf->rx_fifo[ctrlNo]);
+
+			restag = IX_FIFO_RESTAG(&intf->rx_fifo[ctrlNo]);
+			dev_info(&intf->pdev->dev, "can%i Rx size:%u, numobjs: %u, restag: 0x%08x\n", ctrlNo, IX_FIFO_OBJSIZE(&intf->rx_fifo[ctrlNo]), IX_FIFO_NUMOBJS(&intf->rx_fifo[ctrlNo]), restag);
+
+			if (IXXAT_FIFO2_RES_TAG == restag) {
+			} else if (IXXAT_FIFO_RES_TAG == restag) {
+			} else {
+				dev_err(&intf->pdev->dev, "Error: Unexpected rx fifo[%d] resource tag: 0x%08x", ctrlNo, restag);
+				res = -ENOBUFS;
+			}
+
+			#ifdef DEBUG
+				showdump(IX_FIFO_BASE(intf->rx_fifo[ctrlNo]), 0x40);
+			#endif
+
+			ctrlNo++;
 		}
-		else {
-			intf->tx_fifo[ctrlNo] = intf->tx_fifo[ctrlNo-1] + IXXAT_PCI_RES_HEADER_SIZE + data_off;
-		}
-
-		obj_tag = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_TAG);
-		obj_size = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_OBJ_SIZE);
-		obj_num = ioread32(intf->tx_fifo[ctrlNo] + IXXAT_PCI_RES_NUM_OBJ);
-		data_off = obj_size * obj_num;
-
-		if (IXXAT_PCI_PCRFIFO_RES_TAG != obj_tag)
-			dev_err(&intf->pdev->dev, "Error: Unexpected tx fifo[%d] resource tag: %x expected: %x", ctrlNo, obj_tag, IXXAT_PCI_PCRFIFO_RES_TAG);
-
-		memOffset = intf->tx_fifo[ctrlNo] - intf->cmd_dbg_fifo;
-		ix_trace_printk ("%08x Fifo %i Tx %p (%i), size:%i, num, %i\n", obj_tag, ctrlNo, intf->tx_fifo[ctrlNo], memOffset, obj_size, obj_num);
-		++ctrlNo;
 	}
 
-
-	ctrlNo=0;
-	data_off=0;
-
-	while (ctrlNo < maxCtrl) {
-		if ( ctrlNo == 0) {
-			intf->rx_fifo[ctrlNo] = intf->dmavadd;
-		}
-		else {
-			intf->rx_fifo[ctrlNo] = intf->rx_fifo[ctrlNo-1] + IXXAT_PCI_RES_HEADER_SIZE + data_off;
-		}
-
-		obj_tag = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_TAG));
-		obj_size = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_OBJ_SIZE));
-		obj_num = *((u32 *) (intf->rx_fifo[ctrlNo] + IXXAT_PCI_RES_NUM_OBJ));
-		data_off = obj_size * obj_num;
-
-		if (IXXAT_PCI_PCRFIFO_RES_TAG != obj_tag)
-			dev_err(&intf->pdev->dev, "Error: Unexpected rx fifo[%d] resource tag: %x expected: %x", ctrlNo, obj_tag, IXXAT_PCI_PCRFIFO_RES_TAG);
-
-		memOffset = intf->rx_fifo[ctrlNo] - intf->dmavadd;
-		ix_trace_printk ("%08x Fifo %i Rx %p (%i), size:%i, num, %i\n",  obj_tag,ctrlNo, intf->rx_fifo[ctrlNo], memOffset, obj_size, obj_num);
-		#ifdef DEBUG
-			showdump(intf->rx_fifo[ctrlNo], 0x40);
-		#endif
-
-		++ctrlNo;
-	} ;
-
-	return 0;
+	return res;
 }
 
 static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
@@ -2107,21 +1991,20 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 	dev->prev_dev = pci_get_drvdata(pdev);
 	pci_set_drvdata(pdev, dev);
 
-	dev->tx_fifo = intf->tx_fifo[ctrl_idx];
-	dev->rx_fifo = intf->rx_fifo[ctrl_idx];
+	dev->tx_fifo = &(intf->tx_fifo[ctrl_idx]);
+	dev->rx_fifo = &(intf->rx_fifo[ctrl_idx]);
 
 	SET_NETDEV_DEV(netdev, &pdev->dev);
 
 	err = register_candev(netdev);
 	if (err) {
-		netdev_err(netdev,
-			"Error %d: Failed to register Can device\n", err);
+		netdev_err(netdev, "Error %x: Failed to register Can device\n", err);
 		goto free_candev;
 	}
 
 	err = sysfs_create_group(&netdev->dev.kobj, &ixxat_pdev_group);
 	if (err < 0) {
-		netdev_err(netdev, "Error: %d: create sysfs failed\n", err);
+		netdev_err(netdev, "Error: %x: create sysfs failed\n", err);
 		goto free_candev;
 	}
 
@@ -2153,20 +2036,127 @@ free_candev:
 	return err;
 }
 
+// device init states
+#define IXXAT_PROBESTATE_UNINIT				1
+#define IXXAT_PROBESTATE_DEVICE_ENABLED			2
+#define IXXAT_PROBESTATE_PCI_REGIONS_REQUESTED		3
+#define IXXAT_PROBESTATE_PCI_ADAPTER_REQUESTED		4
+#define IXXAT_PROBESTATE_DEVICE_ALLOCATED		5
+#define IXXAT_PROBESTATE_DEVICE_REGISTERED		6
+#define IXXAT_PROBESTATE_BOOTMGR_CONTACTED		7
+#define IXXAT_PROBESTATE_DMA_ADDRTABLE_INITIALIZED	8
+#define IXXAT_PROBESTATE_FW_UPLOAD_DONE			9
+#define IXXAT_PROBESTATE_FW_RUNNING			10
+#define IXXAT_PROBESTATE_FW_CONTACTED			11
+#define IXXAT_PROBESTATE_FW_CONNECTION_ESTABLISHED	12
+#define IXXAT_PROBESTATE_INITIALIZED			13
+
+static int ixxat_dev_uninit(struct pci_dev *pdev, struct ixxat_pci_interface *intf, int state)
+{
+	dev_info(&pdev->dev, "ixxat_dev_uninit state: %i\n", state);
+
+	int err;
+	if (state >= IXXAT_PROBESTATE_INITIALIZED) {
+	}
+
+	if (state >= IXXAT_PROBESTATE_FW_CONNECTION_ESTABLISHED) {
+
+		// If probe fails sometimes using another PCIe slot helps.
+		// Problems with the PCIe connection can lead to failures at almost all stages
+		// during the device setup process. E.g. connect bootloader, download/start firmware,
+		// connect firmware, ...
+		dev_info(&intf->pdev->dev, "HINT: try to place interface in another PCIe slot\n");
+
+		// cleanup devices
+		ixxat_pci_disconnect(pdev);
+		dev_info(&pdev->dev, "ixxat_pci_disconnect\n");
+	}
+
+	if (state >= IXXAT_PROBESTATE_FW_CONTACTED) {
+	}
+
+	if (state >= IXXAT_PROBESTATE_FW_RUNNING) {
+	}
+
+	if (state >= IXXAT_PROBESTATE_FW_UPLOAD_DONE) {
+	}
+
+	if (state >= IXXAT_PROBESTATE_DMA_ADDRTABLE_INITIALIZED) {
+		dev_info(&pdev->dev,"reset back to bootloader\n");
+		// reset fw back to bootloader
+		err = ixxat_pci_mc_reset(intf);
+		if (err) {
+			dev_err(&pdev->dev,"Error %x: device reset failed\n", err);
+		} else {
+			// reset dma address translation table
+			err = ixxat_pci_init_dma_adresstrans_table(intf, 0);
+			if (err) {
+				dev_err(&pdev->dev,"Error %x: reset dma address translation table failed\n", err);
+			}
+		}
+	}
+
+	if (state >= IXXAT_PROBESTATE_BOOTMGR_CONTACTED) {
+	}
+
+	if (state >= IXXAT_PROBESTATE_DEVICE_REGISTERED) {
+		// disable all interrupts
+		ixxat_pci_int_ena_req(intf, 0, IXXAT_PCI_ENABLE_INT);
+		if (intf->device_irq) {
+			devm_free_irq(&intf->pdev->dev, pci_irq_vector(intf->pdev, 0), intf);
+			pci_free_irq_vectors(intf->pdev);
+		}
+	}
+
+	if (state >= IXXAT_PROBESTATE_PCI_ADAPTER_REQUESTED) {
+		dev_info(&pdev->dev,"pci_clear_master\n");
+ 		pci_clear_master(pdev);
+	}
+
+	if (state >= IXXAT_PROBESTATE_PCI_REGIONS_REQUESTED) {
+		dev_info(&pdev->dev,"pci_release_regions\n");
+		pci_release_regions(pdev);
+	}
+
+	if (state >= IXXAT_PROBESTATE_DEVICE_ALLOCATED) {
+		dev_info(&pdev->dev,"free interface\n");
+		devm_kfree(&pdev->dev, intf);
+	}
+
+	if (state >= IXXAT_PROBESTATE_DEVICE_ENABLED) {
+		dev_info(&pdev->dev,"pci_disable_device\n");
+		pci_disable_device(pdev);
+	}
+
+	if (state >= IXXAT_PROBESTATE_UNINIT) {
+		dev_info(&pdev->dev,"state uninit\n");
+	}
+
+	return 0;
+}
+
 static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
+	int state = IXXAT_PROBESTATE_UNINIT;
 	struct ixxat_pci_adapter *adapter;
 	struct ixxat_pci_interface *intf;
 	struct ixxat_intf_caps intf_caps;
 	int i;
 	u32 mem_len;
+	u32 period;
 	int err = pci_enable_device(pdev);
 	if (err)
 		return err;
 
+	state = IXXAT_PROBESTATE_DEVICE_ENABLED;
+	//-------------------------------------------------------------------
+
 	err = pci_request_regions(pdev, KBUILD_MODNAME);
 	if (err)
-		goto lbl_disable_pci;
+		goto lbl_failed;
+
+	state = IXXAT_PROBESTATE_PCI_REGIONS_REQUESTED;
+	//-------------------------------------------------------------------
 
 	pci_set_master(pdev);
 
@@ -2174,15 +2164,21 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (!adapter) {
 		pr_err("%s: Unknown device id %d\n", KBUILD_MODNAME, id->device);
 		err = -ENODEV;
-		goto lbl_release_regions;
+		goto lbl_failed;
 	}
+
+	state = IXXAT_PROBESTATE_PCI_ADAPTER_REQUESTED;
+	//-------------------------------------------------------------------
 
 	intf = devm_kzalloc(&pdev->dev, sizeof(*intf), GFP_KERNEL);
 	if (!intf)
 	{
 		err = -ENOMEM;
-		goto lbl_release_regions;
+		goto lbl_failed;
 	}
+
+	state = IXXAT_PROBESTATE_DEVICE_ALLOCATED;
+	//-------------------------------------------------------------------
 
 	intf->pdev = pdev;
 	mutex_init(&intf->cmd_lock);
@@ -2190,84 +2186,167 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* call the probe function of corresponding adapter */
 	err = ixxat_pci_register_dev(pdev, intf);
 	if (err)
-		goto lbl_release_regions;
+		goto lbl_failed;
 
-	ix_trace_printk ( "ixxat_init_cmdfifo\n");
-	ixxat_init_cmdfifo ( intf, NULL );
+	ix_trace_printk("IXX: ixxat_init_cmdfifo 1\n");
+	ixxat_init_cmdfifo(intf);
+
+	/* get the hardware version from the bootloader firmware to decide which firmware to load */
+	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
+	if (err) {
+		dev_err(&pdev->dev,"Error %x: Failed to get device information from bootloader\n", err);
+		goto lbl_failed;
+	}
 
 	/* reset the interface once */
 	err = ixxat_pci_mc_reset(intf);
 	if (err)
-		goto lbl_free_memory;
-
-	/* convey dma hardware address to the interface */
-	err = ixxat_pci_convey_dma(intf, 1);
-	if (err)
-		goto lbl_free_memory;
+		goto lbl_failed;
 
 	/* enable interface's pci interrupts  */
 	// is made on the start ctrl
 	//err = ixxat_pci_int_ena_req(intf, 1);
 	//if (err)
-	//	goto lbl_dev_prepare_failed;
+	//	goto lbl_failed;
+
+	state = IXXAT_PROBESTATE_DEVICE_REGISTERED;
+	//-------------------------------------------------------------------
+
+	ix_trace_printk("IXX: ixxat_init_cmdfifo\n");
+	ixxat_init_cmdfifo(intf);
 
 	/* send a test command to the device's command channel */
 	err = ixxat_pci_test_cmd(intf);
 	if (err)
-		goto lbl_dev_prepare_failed;
+		goto lbl_failed;
+
+	ix_trace_printk("IXX: after ixxat_pci_test_cmd\n");
+
+	state = IXXAT_PROBESTATE_BOOTMGR_CONTACTED;
+	//-------------------------------------------------------------------
+
+	/* init interface dma hardware address table */
+	err = ixxat_pci_init_dma_adresstrans_table(intf, 1);
+	if (err)
+		goto lbl_failed;
+
+	ix_trace_printk("IXX: after ixxat_pci_init_dma_adresstrans_table\n");
 
 	/* test if dma address was successfully delivered to the interface */
 	err = ixxat_pci_test_dma(intf);
 	if (err)
-		goto lbl_dev_prepare_failed;
+		goto lbl_failed;
+
+	ix_trace_printk("IXX: after ixxat_pci_test_dma\n");
+
+	state = IXXAT_PROBESTATE_DMA_ADDRTABLE_INITIALIZED;
+
+	//-------------------------------------------------------------------
+
+	/* get the hardware version from the bootloader firmware to decide which firmware to load */
+	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
+	if (err) {
+		dev_err(&pdev->dev,"Error %x: Failed to get device information from bootloader\n", err);
+		goto lbl_failed;
+	}
 
 	/* upload the device's firmware */
 	err = ixxat_pci_upload_fw(pdev, intf);
-	if (err)
-		goto lbl_dev_prepare_failed;
+	if (err) {
+		dev_err(&pdev->dev,"Error %x: Firmware upload failed\n", err);
+		goto lbl_failed;
+	}
+
+	ix_trace_printk("IXX: after ixxat_pci_upload_fw\n");
+
+	state = IXXAT_PROBESTATE_FW_UPLOAD_DONE;
+	//-------------------------------------------------------------------
 
 	/* start uploaded firmware */
 	err = ixxat_pci_start_fw(intf);
-	if (err)
-		goto lbl_dev_prepare_failed;
+	if (err) {
+		dev_err(&pdev->dev,"Error %x: Firmware start failed\n", err);
+		goto lbl_failed;
+	}
 
-	/* give device some time to start */
-	msleep(100);
+	ix_trace_printk("IXX: after ixxat_pci_start_fw\n");
+
+	// Wait here until board switches to firmware or timeout occurs
+	err = -ENODEV;  // timeout
+	period = IXXAT_PCI_FIRMWARE_STARTUP_PERIOD / 100;
+	do
+	{
+		if (IXXAT_PCI_MBX_ACK_START_FIRM == ixxat_pci_read_pc_mailbox(intf, 0))
+		{
+			ix_trace_printk("IXX: firmware detected\n");
+			err = 0;
+			break;
+		}
+		usleep_range(99, 100);
+	} while (period--);
+
+	ix_trace_printk("IXX: after firmware startup\n");
+
+	if (err) {
+		dev_err(&pdev->dev,"Error %x: Firmware start timeout\n", err);
+		goto lbl_failed;
+	}
+
+	state = IXXAT_PROBESTATE_FW_RUNNING;
+	//-------------------------------------------------------------------
 
 	ix_trace_printk ( "ixxat_init_cmdfifo\n");
-	ixxat_init_cmdfifo ( intf, NULL );
+	ixxat_init_cmdfifo(intf);
+
+	ix_trace_printk("IXX: after ixxat_init_cmdfifo\n");
 
 	err = ixxat_pci_get_intf_caps(intf, &intf_caps);
 	if (err)
-		goto lbl_dev_prepare_failed;
+		goto lbl_failed;
+
+	ix_trace_printk("IXX: after ixxat_pci_get_intf_caps\n");
+
+	state = IXXAT_PROBESTATE_FW_CONTACTED;
+	//-------------------------------------------------------------------
 
 	err = ixxat_pci_AdrTableSize(intf, &mem_len);
-	ix_trace_printk ( "ixxat_pci_AdrTableSize %i (-> mem_len %i)\n", err, mem_len);
+	ix_trace_printk ( "ixxat_pci_AdrTableSize result: %x (-> mem_len %i)\n", err, mem_len);
+	if (err)
+		goto lbl_failed;
+
 	err = ixxat_pci_AdrTable_Establish (intf, 0, mem_len + 1);
-	ix_trace_printk ( "ixxat_pci_AdrTable_Establish %i\n", err);
+	ix_trace_printk ( "ixxat_pci_AdrTable_Establish result: %x\n", err);
+	if (err)
+		goto lbl_failed;
+
+	ix_trace_printk("IXX: ixxat_init_fwfifos\n");
+	err = ixxat_init_fwfifos( intf, &intf_caps);
+	if (err)
+		goto lbl_failed;
+
+	state = IXXAT_PROBESTATE_FW_CONNECTION_ESTABLISHED;
+	//-------------------------------------------------------------------
 
 	adapter->ctrl_count = 0;
-
 	for (i = 0; i < intf_caps.bus_ctrl_count; i++) {
-		if (IXXAT_PCI_BUS_TYPE(intf_caps.bus_ctrl_types[i])
-			== IXXAT_PCI_BUS_CAN) {
+		if (IXXAT_PCI_BUS_TYPE(intf_caps.bus_ctrl_types[i]) == IXXAT_PCI_BUS_CAN) {
 			adapter->ctrl_count++;
 		}
 	}
 
 	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
 	if (err) {
-		dev_err(&pdev->dev,"Error %d: Failed to get device information\n", err);
-		goto lbl_dev_prepare_failed;
+		dev_err(&pdev->dev,"Error %x: Failed to get device information from firmware\n", err);
+		goto lbl_failed;
 	}
 
 	err = ixxat_pci_get_firmware_info2(intf, &intf->fw_info);
 	if (err) {
-		dev_info(&pdev->dev,"Error %d: Failed to get firmware information version 2\n", err);
+		dev_info(&pdev->dev,"Error %x: Failed to get firmware information version 2\n", err);
 		err = ixxat_pci_get_firmware_info(intf, &intf->fw_info);
 		if (err) {
-			dev_err(&pdev->dev,"Error %d: Failed to get firmware information version\n", err);
-			goto lbl_dev_prepare_failed;
+			dev_err(&pdev->dev,"Error %x: Failed to get firmware information version\n", err);
+			goto lbl_failed;
 		}
 	}
 
@@ -2278,62 +2357,28 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	dev_info(&pdev->dev, "Firmware version: %d.%d.%d.%d (type: %d)\n", 
 		intf->fw_info.major_version, intf->fw_info.minor_version, intf->fw_info.build_version, intf->fw_info.revision, intf->fw_info.firmware_type);
 
-	ix_trace_printk ( "ixxat_init_fwfifos\n");
-	ixxat_init_fwfifos ( intf, adapter->ctrl_count );
-
 	for (i = 0; i < intf_caps.bus_ctrl_count; i++) {
 		if (IXXAT_PCI_BUS_TYPE(intf_caps.bus_ctrl_types[i])
 			== IXXAT_PCI_BUS_CAN) {
 
 			err = ixxat_pci_create_dev(intf, adapter, pdev, i);
 			if (err) {
-				dev_err(&intf->pdev->dev,
-					"Error %d: Device failed %d\n", err, i);
-				ixxat_pci_disconnect(pdev);
-				goto lbl_dev_prepare_failed;
+				dev_err(&intf->pdev->dev, "Error %x: Device failed %d\n", err, i);
+				goto lbl_failed;
 			}
 		}
 	}
 
+	state = IXXAT_PROBESTATE_INITIALIZED;
+	//-------------------------------------------------------------------
+
 	return err;
 
-lbl_dev_prepare_failed:
-	ixxat_pci_convey_dma(intf, 1);  //Firmware Fix (0)
-	ixxat_pci_int_ena_req(intf, 0, 0x00FF0000);
+lbl_failed:
+	ixxat_dev_uninit(pdev, intf, state);
 
-lbl_free_memory:
-	if (intf->device_irq) {
-		devm_free_irq(&intf->pdev->dev,
-			      pci_irq_vector(intf->pdev, 0),
-			      intf);
-		pci_free_irq_vectors(intf->pdev);
-	}
+	dev_err(&pdev->dev,"Error %x: ixxat_pci_probe failed\n", err);
 
-	// kfree(NULL) is safe so no check is required
-	kfree(intf->addmemvadd);
-	intf->addmemvadd = NULL;
-
-	if (intf->dmavadd)
-		dma_free_coherent(&pdev->dev, intf->dmalen, intf->dmavadd,
-				    intf->dmaadd);
-
-	iounmap(intf->memvadd);
-	release_mem_region(intf->memadd, intf->memlen);
-
-	iounmap(intf->reg1vadd);
-	release_mem_region(intf->reg1add, intf->reg1len);
-
-lbl_release_regions:
-	pci_release_regions(pdev);
-
-lbl_disable_pci:
-	pci_disable_device(pdev);
-	devm_kfree(&pdev->dev, intf);
-
-	/* pci_xxx_config_word() return positive PCIBIOS_xxx error codes while
-	 * the probe() function must return a negative errno in case of failure
-	 * (err is unchanged if negative)
-	 */
 	return pcibios_err_to_errno(err);
 }
 
