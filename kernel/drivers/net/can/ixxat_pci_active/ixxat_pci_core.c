@@ -27,7 +27,7 @@
 MODULE_AUTHOR("HMS Technology Center Ravensburg Gmbh <socketcan@hms-networks.de>");
 MODULE_DESCRIPTION("SocketCAN driver for HMS Ixxat IB2xx, IB4xx, IB6xx, IB810 boards");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0.556-REL");
+MODULE_VERSION("2.0.574-REL");
 
 #define IX_STATISTICS_EXACT 0
 
@@ -112,27 +112,23 @@ void ixxat_pci_setup_cmd(struct ixxat_pci_dal_req *req, u32 req_size,
 	res->ret_code = cpu_to_le32(0xffffffff);
 }
 
-int ixxat_pci_handle_cmd(struct ixxat_pci_interface *intf,
-			 struct ixxat_pci_dal_req *req,
-			 struct ixxat_pci_dal_res *res)
+static int ixxat_pci_handle_cmd(struct ixxat_pci_interface *intf,
+				struct ixxat_pci_dal_req *req,
+				struct ixxat_pci_dal_res *res)
 {
 	int err;
 
 	err = ixxat_fifo_write_cmd(intf, &intf->cmd_tx_fifo, req, res);
 	if (err) {
 		dev_err(&intf->pdev->dev, "Error %x: Send cmd %x failed", err, req->code);
-		goto fail;
+	} else {
+		ixxat_pci_write_altera_mailbox(intf, 0, 0xFFFFFFFF); // write to mailbox 0
+
+		err = ixxat_fifo_read_cmd(intf, &intf->cmd_rx_fifo, req, res);
+		if (err) {
+			dev_err(&intf->pdev->dev, "Error %x: Receive cmd failed", err);
+		}
 	}
-
-	ixxat_pci_write_altera_mailbox(intf, 0, 0xFFFFFFFF); // write to mailbox 0
-
-	err = ixxat_fifo_read_cmd(intf, &intf->cmd_rx_fifo, req, res);
-	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Receive cmd failed", err);
-		goto fail;
-	}
-
-fail:
 	return err;
 }
 
@@ -270,7 +266,7 @@ static int ixxat_pci_register_interrupts(struct pci_dev *pdev,
 	ixxat_pci_int_ena_req(intf, 0xFF, 0);
 
 	ret = pci_alloc_irq_vectors(pdev, 1, 1,
-					PCI_IRQ_MSI | PCI_IRQ_LEGACY);
+					PCI_IRQ_MSI | PCI_IRQ_INTX);
 	if (ret < 0)
 		dev_err(&pdev->dev,
 			 "Error %d: Failed to allocate IRQ-vector\n", ret);
@@ -361,44 +357,45 @@ release_reg1:
 	return err;
 }
 
+int ixxat_pci_exec_cmd( struct ixxat_pci_interface *intf,
+			struct ixxat_pci_dal_req *req,
+			struct ixxat_pci_dal_res *res)
+{
+	int err;
+	err = mutex_lock_interruptible(&intf->cmd_lock);
+	if (err) {
+		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
+	} else {
+		err = ixxat_pci_handle_cmd(intf, req, res);
+		mutex_unlock(&intf->cmd_lock);
+	}
+	return err;
+}
+
 static int ixxat_pci_test_cmd(struct ixxat_pci_interface *intf)
 {
 	int i, err;
-	struct ixxat_pci_loopback_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 res_size = sizeof(cmd->res) + sizeof(cmd->res_data);
+	struct ixxat_pci_loopback_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 res_size = sizeof(cmd.res) + sizeof(cmd.res_data);
 	const u32 req_size = cmd_size - res_size;
 	const u32 req_code = IXXAT_PCI_CMD_LOOPBACK;
 
 	ix_trace_printk(">> ixxat_pci_test_cmd\n");
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
-
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
 
 	for (i = 0; i < IXXAT_PCI_CMD_LB_SIZE; i++)
-		cmd->req_data[i] = i + 1;
+		cmd.req_data[i] = i + 1;
 
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+	} else if (le32_to_cpu(cmd.res.ret_size) == req_size) {
+		for (i = 0; i < IXXAT_PCI_CMD_LB_SIZE; i++)
+			if (cmd.req_data[i] != cmd.res_data[i])
+				err = -EINVAL;
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err) {
-		} else if (le32_to_cpu(cmd->res.ret_size) == req_size) {
-			for (i = 0; i < IXXAT_PCI_CMD_LB_SIZE; i++)
-				if (cmd->req_data[i] != cmd->res_data[i])
-					err = -EINVAL;
-		} else {
-			err = -EINVAL;
-		}
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
+		err = -EINVAL;
 	}
 
 	return err;
@@ -426,28 +423,18 @@ static int ixxat_pci_test_dma(struct ixxat_pci_interface *intf)
 		return -ENOMEM;
 	}
 
-	ixxat_pci_setup_cmd(&req->dal_req, req_size, &res->dal_res,
-			    res_size, req_code);
+	ixxat_pci_setup_cmd(&req->dal_req, req_size, &res->dal_res, res_size, req_code);
 	req->addr = cpu_to_le32(IXXAT_PCI_DMA_TEST_ADDR);
 
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &req->dal_req, &res->dal_res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(req);
-		kfree(res);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &req->dal_req, &res->dal_res);
-		if (err) {
-		} else {
-			err = memcmp(intf->dmavadd, res->data,
-					 sizeof(IXXAT_PCI_DMA_TEST_CONTENT));
-		}
-
-		kfree(req);
-		kfree(res);
-		mutex_unlock(&intf->cmd_lock);
+		err = memcmp(intf->dmavadd, res->data,
+					sizeof(IXXAT_PCI_DMA_TEST_CONTENT));
 	}
+
+	kfree(req);
+	kfree(res);
 
 	return err;
 }
@@ -457,19 +444,14 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 {
 	const struct firmware *fw;
 	int i, err;
-	struct ixxat_pci_write_res *res;
+	struct ixxat_pci_write_res res;
 	struct ixxat_pci_write_req *req = NULL;
 	struct ixxat_pci_fwHdr * hdr = NULL;
-	const u32 res_size = sizeof(*res);
-	u32 req_size;
+	const u32 res_size = sizeof(res);
 	const u32 req_code = IXXAT_PCI_CMD_WRITE_BLOCK;
+	u32 req_size, cur_max_req_size;
 	void * pFw;
-	u32 loopCnt = 0;
 	const char* firmwarefile;
-
-	res = kmalloc(res_size, GFP_KERNEL);
-	if (!res)
-		return -ENOMEM;
 
 	firmwarefile = IXXAT_FIRMWARE_FPGA_V1;
 	if (pdev->device == CAN_IB640_PRODUCT_ID) {
@@ -477,87 +459,85 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 	}
 	else
 	{
-		if ((intf->dev_info.intf_fpga_version & IX_FPGAVERSION_MASK) >= IX_FPGAVERSION_MAJOR_V2) {
+		if ((intf->dev_info.intf_fpga_version & IX_FPGAVERSION_MASK) >= IX_FPGAVERSION_V2) {
 			firmwarefile = IXXAT_FIRMWARE_FPGA_V2;
 		}
 	}
 	dev_info(&intf->pdev->dev, "FPGA version: 0x%08x, use firmware: %s", intf->dev_info.intf_fpga_version, firmwarefile);
+	if ((intf->dev_info.intf_fpga_version & IX_FPGAVERSION_MASK) < IX_FPGAVERSION_V2) {
+		dev_info(&intf->pdev->dev, "FPGA update recommended.");
+	}
 
 	err = request_firmware(&fw, firmwarefile, &pdev->dev);
 	if (err) {
 		dev_err(&intf->pdev->dev, "Error %x: Request fw failed", err);
 	} else {
-		pFw = (void *) fw->data;
-		hdr = (struct ixxat_pci_fwHdr *) (fw->data);
-		ix_trace_printk ("%s, typ:%i, maxlen %i\n", hdr->caIdent, hdr->type, hdr->maxlen );
-		pFw += sizeof (struct ixxat_pci_fwHdr);
 
-		for (i = 0; i < fw->size;) {
-			struct ixxat_pci_fw *fwb = (struct ixxat_pci_fw *) (pFw + i);
-			u32 addr = le32_to_cpu(fwb->address);
-			u16 len = le16_to_cpu(fwb->length);
-			u8 *data = fwb->data;
+		// initial request size 512 bytes
+		cur_max_req_size =
+		req_size = 512 + sizeof(req->dal_req) + sizeof(req->addr);
 
-			if ((addr==0)&&(len==0))
-				break;
-
-			// ix_trace_printk("adr %08x, len:%04x, data %02x %02x \n", addr, len, data[0], data[1] );
-
-			req_size = len + sizeof(req->dal_req)
-					+ sizeof(req->addr);
-
-			req = kmalloc(req_size, GFP_KERNEL);
-			if (!req) {
-				err = -ENOMEM;
-				break;
-			}
-
-			ixxat_pci_setup_cmd(&req->dal_req, req_size,
-						&res->dal_res, res_size, req_code);
-			req->addr = cpu_to_le32(addr);
-
-			if (req_size > IXXAT_PCI_CMD_MAX_SIZE) {
-				err = -ENOBUFS;
-				kfree(req);
-				break;
-			}
-
-			err = mutex_lock_interruptible(&intf->cmd_lock);
-
-			if (err) {
-				dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-				kfree(req);
-				break;
-			}
-
-			memcpy(req->data, data, len);
-
-			err = ixxat_pci_handle_cmd(intf, &req->dal_req, &res->dal_res);
-			if (err) {
-				dev_err(&intf->pdev->dev,
-					"Error %x: Upload fw failed %d\n", err, i);
-
-				kfree(req);
-				req = NULL;
-				mutex_unlock(&intf->cmd_lock);
-				break;
-			}
-
-			kfree(req);
-			req = NULL;
-			mutex_unlock(&intf->cmd_lock);
-
-			i = i + sizeof(addr) + sizeof(len) + le32_to_cpu(hdr->maxlen);
-
-			if ( ++ loopCnt > 10000 ) {
-				ix_trace_printk ("leave Fw download Pos:%i, size:%li \n", i, fw->size);
-			}
+		req = kmalloc(cur_max_req_size, GFP_KERNEL);
+		if (!req) {
+			err = -ENOMEM;
+			dev_err(&intf->pdev->dev, "Error %x: Alloc request struct failed", err);
 		}
+		else {
+			pFw = (void *) fw->data;
+			hdr = (struct ixxat_pci_fwHdr *) (fw->data);
+			ix_trace_printk ("%s, typ:%i, maxlen %i\n", hdr->caIdent, hdr->type, hdr->maxlen );
+			pFw += sizeof (struct ixxat_pci_fwHdr);
 
-		release_firmware(fw);
+			for (i = 0; i < fw->size;) {
+				struct ixxat_pci_fw *fwb = (struct ixxat_pci_fw *) (pFw + i);
+				u32 addr = le32_to_cpu(fwb->address);
+				u16 len = le16_to_cpu(fwb->length);
+				u8 *data = fwb->data;
+
+				if ((addr==0)&&(len==0))
+					break;
+
+				// ix_trace_printk("adr %08x, len:%04x, data %02x %02x \n", addr, len, data[0], data[1] );
+
+				req_size = len + sizeof(req->dal_req)
+						+ sizeof(req->addr);
+
+				// resize request struct if necessary
+				if (req_size > cur_max_req_size)
+				{
+					cur_max_req_size = req_size + 64;
+					kfree(req);
+					req = kmalloc(cur_max_req_size, GFP_KERNEL);	
+					if (!req) {
+						err = -ENOMEM;
+						dev_err(&intf->pdev->dev, "Error %x: Realloc request struct failed", err);
+						break;
+					}
+				}
+
+				ixxat_pci_setup_cmd(&req->dal_req, req_size, &res.dal_res, res_size, req_code);
+				req->addr = cpu_to_le32(addr);
+
+				if (req_size > IXXAT_PCI_CMD_MAX_SIZE) {
+					err = -ENOBUFS;
+					dev_err(&intf->pdev->dev, "Error %x: Firmware line exceeds max command size", err);
+					break;
+				}
+
+				memcpy(req->data, data, len);
+
+				err = ixxat_pci_exec_cmd(intf, &req->dal_req, &res.dal_res);
+				if (err) {
+					dev_err(&intf->pdev->dev, "Error %x: Upload fw failed %d\n", err, i);
+					break;
+				}
+
+				i = i + sizeof(addr) + sizeof(len) + le32_to_cpu(hdr->maxlen);
+			}
+			release_firmware(fw);
+		}
+		kfree(req);
 	}
-
-	kfree(res);
 
 	return err;
 }
@@ -565,32 +545,18 @@ static int ixxat_pci_upload_fw(struct pci_dev *pdev,
 static int ixxat_pci_start_fw(struct ixxat_pci_interface *intf)
 {
 	int err;
-	struct ixxat_pci_start_fw_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 res_size = sizeof(cmd->res);
+	struct ixxat_pci_start_fw_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 res_size = sizeof(cmd.res);
 	const u32 req_size = cmd_size - res_size;
 	const u32 req_code = IXXAT_PCI_CMD_STARTFIRMWARE;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
+	cmd.reserved = 0;
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-	cmd->reserved = 0;
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
-	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err)
-			dev_err(&intf->pdev->dev, "Error %x: Start fw failed\n", err);
-
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
+		dev_err(&intf->pdev->dev, "Error %x: Start fw failed\n", err);
 	}
 
 	return err;
@@ -599,37 +565,23 @@ static int ixxat_pci_start_fw(struct ixxat_pci_interface *intf)
 static int ixxat_pci_AdrTableSize(struct ixxat_pci_interface *intf, u32 * mem_len)
 {
 	int err;
-	struct ixxat_pci_adrtable_size_cmd *cmd;
+	struct ixxat_pci_adrtable_size_cmd cmd;
 
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 req_size = sizeof(cmd->req);
+	const u32 cmd_size = sizeof(cmd);
+	const u32 req_size = sizeof(cmd.req);
 	const u32 res_size = cmd_size - req_size;
 	const u32 req_code = IXXAT_PCI_CMD_ADRTABLE_SIZE;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %x: query adr table size failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err)
-		{
-			dev_err(&intf->pdev->dev, "Error %x: query adr table size failed\n", err);
+		if (mem_len) {
+			*mem_len = cmd.mem_size;
 		}
-		else {
-			if (mem_len)
-				*mem_len = cmd->mem_size;
-		}
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
 	}
 
 	return err;
@@ -638,37 +590,23 @@ static int ixxat_pci_AdrTableSize(struct ixxat_pci_interface *intf, u32 * mem_le
 static int ixxat_pci_AdrTable_Establish (struct ixxat_pci_interface *intf, u32 mem_offset, u32 mem_len)
 {
 	int err;
-	struct ixxat_pci_adrtable_establish_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 res_size = sizeof(cmd->res);
+	struct ixxat_pci_adrtable_establish_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 res_size = sizeof(cmd.res);
 	const u32 req_size = cmd_size - res_size;
 	const u32 req_code = IXXAT_PCI_CMD_ADRTABLE_ESTABLISH;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-//	cmd->reserved = 0;
+	cmd.mem_offset = mem_offset;
+	cmd.mem_len = mem_len;
+	cmd.msi_offset = 0;
+	cmd.msi_len = 0;
+	cmd.msi_num = 0;
 
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
-	cmd->mem_offset = mem_offset;
-	cmd->mem_len = mem_len;
-	cmd->msi_offset = 0;
-	cmd->msi_len = 0;
-	cmd->msi_num = 0;
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
-	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err)
-			dev_err(&intf->pdev->dev, "Error %x: establish adr table failed\n", err);
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
+		dev_err(&intf->pdev->dev, "Error %x: establish adr table failed\n", err);
 	}
 
 	return err;
@@ -791,7 +729,7 @@ static int ixxat_pci_init_dma_adresstrans_table(struct ixxat_pci_interface *intf
 
 	if (enable) {
 		page_cnt = min(page_cnt, (u16)(IXXAT_PCI_DMA_SIZE / page_sz));
-		
+
 		for (i = 0; i < page_cnt; i++) {
 			dma_high_addr = dma_phys_addr >> IXXAT_PCI_DMA_OFFSET_HIGH;
 			dma_low_addr = (dma_phys_addr & IXXAT_PCI_DMA_ADD_LOW);
@@ -1147,42 +1085,60 @@ static int ixxat_pci_get_intf_caps(struct ixxat_pci_interface *intf,
 				   struct ixxat_intf_caps *intf_caps)
 {
 	int err, i;
-	struct ixxat_pci_intf_caps_cmd *cmd;
+	struct ixxat_pci_intf_caps_cmd cmd;
 	u16 num_ctrl;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 req_size = sizeof(cmd->req);
+	const u32 cmd_size = sizeof(cmd);
+	const u32 req_size = sizeof(cmd.req);
 	const u32 res_size = cmd_size - req_size;
 	const u32 req_code = IXXAT_PCI_CMD_GET_DEVCAPS;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %x: Get caps failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err) {
-			dev_err(&intf->pdev->dev, "Error %x: Get caps failed\n", err);
+		memcpy(intf_caps, &cmd.intf_caps, sizeof(cmd.intf_caps));
+		intf_caps->bus_ctrl_count = cmd.intf_caps.bus_ctrl_count;
+		num_ctrl = intf_caps->bus_ctrl_count;
+		if (num_ctrl > ARRAY_SIZE(intf_caps->bus_ctrl_types)) {
+			err = -EINVAL;
 		} else {
-			memcpy(intf_caps, &cmd->intf_caps, sizeof(cmd->intf_caps));
-			intf_caps->bus_ctrl_count = cmd->intf_caps.bus_ctrl_count;
-			num_ctrl = intf_caps->bus_ctrl_count;
-			if (num_ctrl > ARRAY_SIZE(intf_caps->bus_ctrl_types)) {
-				err = -EINVAL;
-			} else {
-				for (i = 0; i < intf_caps->bus_ctrl_count; ++i)
-					intf_caps->bus_ctrl_types[i] = cmd->intf_caps.bus_ctrl_types[i];
-			}
+			for (i = 0; i < intf_caps->bus_ctrl_count; ++i)
+				intf_caps->bus_ctrl_types[i] = cmd.intf_caps.bus_ctrl_types[i];
 		}
+	}
 
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
+	return err;
+}
+
+// get_intf_info command on IB200 FPGA version <= 1.3.0
+static int ixxat_pci_get_intf_info_1_3(struct ixxat_pci_interface *intf,
+				   struct ixxat_intf_info *dev_info)
+{
+	int err;
+	struct ixxat_pci_intf_info_cmd_1_3 cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 req_size = sizeof(cmd.req);
+	const u32 res_size = cmd_size - req_size;
+	const u32 req_code = IXXAT_PCI_CMD_GET_DEVINFO;
+
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
+
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
+	if (err) {
+		dev_err(&intf->pdev->dev, "Error %x: Get info (v1.3) failed\n", err);
+	} else {
+		err = le32_to_cpu(cmd.res.ret_code);
+		if (dev_info)
+		{
+			memset(dev_info, 0, sizeof(*dev_info));
+			memcpy(dev_info->intf_name, &cmd.info.intf_name, sizeof(dev_info->intf_name));
+			strncpy(dev_info->intf_id, cmd.info.intf_id, sizeof(dev_info->intf_id));
+			dev_info->intf_version = cmd.info.intf_version;
+			dev_info->intf_fpga_version = cmd.info.intf_fpga_version;
+			dev_info->reserved = 0;
+		}
 	}
 
 	return err;
@@ -1192,42 +1148,27 @@ static int ixxat_pci_get_intf_info(struct ixxat_pci_interface *intf,
 				   struct ixxat_intf_info *dev_info)
 {
 	int err;
-	struct ixxat_pci_intf_info_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 req_size = sizeof(cmd->req);
+	struct ixxat_pci_intf_info_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 req_size = sizeof(cmd.req);
 	const u32 res_size = cmd_size - req_size;
 	const u32 req_code = IXXAT_PCI_CMD_GET_DEVINFO;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %x: Get info failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err) {
-			dev_err(&intf->pdev->dev, "Error %x: Get info failed\n", err);
-		} else {
-			err = le32_to_cpu(cmd->res.ret_code);
-			if (dev_info)
-			{
-				memset(dev_info, 0, sizeof(*dev_info));
-				memcpy(dev_info->intf_name, &cmd->info.intf_name, sizeof(dev_info->intf_name));
-				strncpy(dev_info->intf_id, cmd->info.intf_id, sizeof(dev_info->intf_id));
-				dev_info->intf_version = cmd->info.intf_version;
-				dev_info->intf_fpga_version = cmd->info.intf_fpga_version;
-				dev_info->reserved = 0;
-			}
+		err = le32_to_cpu(cmd.res.ret_code);
+		if (dev_info) {
+			memset(dev_info, 0, sizeof(*dev_info));
+			memcpy(dev_info->intf_name, &cmd.info.intf_name, sizeof(dev_info->intf_name));
+			strncpy(dev_info->intf_id, cmd.info.intf_id, sizeof(dev_info->intf_id));
+			dev_info->intf_version = cmd.info.intf_version;
+			dev_info->intf_fpga_version = cmd.info.intf_fpga_version;
+			dev_info->reserved = 0;
 		}
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
 	}
 
 	return err;
@@ -1237,42 +1178,27 @@ static int ixxat_pci_get_firmware_info(struct ixxat_pci_interface *intf,
 				   struct ixxat_intf_firmware_info2 *fw_info)
 {
 	int err;
-	struct ixxat_pci_fwinfo_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 req_size = sizeof(cmd->req);
+	struct ixxat_pci_fwinfo_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 req_size = sizeof(cmd.req);
 	const u32 res_size = cmd_size - req_size;
 	const u32 req_code = IXXAT_PCI_CMD_GET_FWINFO;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %x: Get firmware info failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err) {
-			dev_err(&intf->pdev->dev, "Error %x: Get info failed\n", err);
-		} else {
-			err = le32_to_cpu(cmd->res.ret_code);
-			if (fw_info)
-			{
-				fw_info->firmware_type = cmd->info.firmware_type;
-				fw_info->reserved = 0;
-				fw_info->major_version = cmd->info.major_version;
-				fw_info->minor_version = cmd->info.minor_version;
-				fw_info->build_version = cmd->info.build_version;
-				fw_info->revision = 0;
-			}
+		err = le32_to_cpu(cmd.res.ret_code);
+		if (fw_info) {
+			fw_info->firmware_type = cmd.info.firmware_type;
+			fw_info->reserved = 0;
+			fw_info->major_version = cmd.info.major_version;
+			fw_info->minor_version = cmd.info.minor_version;
+			fw_info->build_version = cmd.info.build_version;
+			fw_info->revision = 0;
 		}
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
 	}
 
 	return err;
@@ -1282,42 +1208,27 @@ static int ixxat_pci_get_firmware_info2(struct ixxat_pci_interface *intf,
 				   struct ixxat_intf_firmware_info2 *fw_info)
 {
 	int err;
-	struct ixxat_pci_fwinfo2_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 req_size = sizeof(cmd->req);
+	struct ixxat_pci_fwinfo2_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 req_size = sizeof(cmd.req);
 	const u32 res_size = cmd_size - req_size;
 	const u32 req_code = IXXAT_PCI_CMD_GET_FWINFO2;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %x: Get firmware info2 failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err) {
-			dev_err(&intf->pdev->dev, "Error %x: Get info failed\n", err);
-		} else {
-			err = le32_to_cpu(cmd->res.ret_code);
-			if (fw_info)
-			{
-				fw_info->firmware_type = cmd->info.firmware_type;
-				fw_info->reserved = 0;
-				fw_info->major_version = cmd->info.major_version;
-				fw_info->minor_version = cmd->info.minor_version;
-				fw_info->build_version = cmd->info.build_version;
-				fw_info->revision = cmd->info.revision;
-			}
+		err = le32_to_cpu(cmd.res.ret_code);
+		if (fw_info) {
+			fw_info->firmware_type = cmd.info.firmware_type;
+			fw_info->reserved = 0;
+			fw_info->major_version = cmd.info.major_version;
+			fw_info->minor_version = cmd.info.minor_version;
+			fw_info->build_version = cmd.info.build_version;
+			fw_info->revision = cmd.info.revision;
 		}
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
 	}
 
 	return err;
@@ -1327,36 +1238,23 @@ static int ixxat_pci_start_ctrl(struct ixxat_pci_device *dev, u32 *time_ref)
 {
 	int err;
 	struct ixxat_pci_interface *intf = dev->intf;
-	struct ixxat_pci_start_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 req_size = sizeof(cmd->req);
+	struct ixxat_pci_start_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 req_size = sizeof(cmd.req);
 	const u32 res_size = cmd_size - req_size;
 	const u32 req_code = IXXAT_PCI_CMD_START;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
+	cmd.req.port = cpu_to_le16(dev->ctrl_idx);
+	cmd.time = 0;
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-	cmd->req.port = cpu_to_le16(dev->ctrl_idx);
-	cmd->time = 0;
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %x: Start ctrl failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err) {
-			dev_err(&intf->pdev->dev, "Error %x: Start ctrl failed\n", err);
-		} else {
-			if (time_ref)
-				*time_ref = le32_to_cpu(cmd->time);
+		if (time_ref) {
+			*time_ref = le32_to_cpu(cmd.time);
 		}
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
 	}
 
 	return err;
@@ -1366,34 +1264,21 @@ static int ixxat_pci_stop_ctrl(struct ixxat_pci_device *dev)
 {
 	int err;
 	struct ixxat_pci_interface *intf = dev->intf;
-	struct ixxat_pci_stop_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 res_size = sizeof(cmd->res);
+	struct ixxat_pci_stop_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 res_size = sizeof(cmd.res);
 	const u32 req_size = cmd_size - res_size;
 	const u32 req_code = IXXAT_PCI_CMD_STOP;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
+	cmd.req.port = cpu_to_le16(dev->ctrl_idx);
+	cmd.action = cpu_to_le32(IXXAT_PCI_STOP_ACTION_CLEARALL);
 
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-	cmd->req.port = cpu_to_le16(dev->ctrl_idx);
-	cmd->action = cpu_to_le32(IXXAT_PCI_STOP_ACTION_CLEARALL);
-
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %x: Stop ctrl failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err)
-			dev_err(&intf->pdev->dev, "Error %x: Stop ctrl failed\n", err);
-		else
-			dev->can.state = CAN_STATE_STOPPED;
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
+		dev->can.state = CAN_STATE_STOPPED;
 	}
 
 	return err;
@@ -1983,8 +1868,6 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 
 	dev->can.ctrlmode_supported = adapter->modes;
 
-	dev->can.restart_ms = IXXAT_PCI_DEFAULT_RESTART_MS;
-
 	netdev->netdev_ops = &ixxat_pci_netdev_ops;
 	netdev->flags |= IFF_ECHO;
 
@@ -2194,8 +2077,12 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* get the hardware version from the bootloader firmware to decide which firmware to load */
 	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
 	if (err) {
-		dev_err(&pdev->dev,"Error %x: Failed to get device information from bootloader\n", err);
-		goto lbl_failed;
+		// dev_info(&pdev->dev,"Error %x: Failed to get device information from bootloader, try version 1.3 or older\n", err);
+		err = ixxat_pci_get_intf_info_1_3(intf, &intf->dev_info);
+		if (err) {
+			dev_err(&pdev->dev,"Error %x: Failed to get device information from bootloader\n", err);
+			goto lbl_failed;
+		}
 	}
 
 	/* reset the interface once */
@@ -2222,6 +2109,13 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	ix_trace_printk("IXX: after ixxat_pci_test_cmd\n");
 
+	err = ixxat_pci_get_firmware_info(intf, &intf->bm_info);
+	if (err) {
+		dev_err(&pdev->dev,"Error %x: Failed to get bootmanager information version\n", err);
+		goto lbl_failed;
+	}
+	ix_trace_printk("IXX: after get bootmanager version\n");
+
 	state = IXXAT_PROBESTATE_BOOTMGR_CONTACTED;
 	//-------------------------------------------------------------------
 
@@ -2242,13 +2136,6 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	state = IXXAT_PROBESTATE_DMA_ADDRTABLE_INITIALIZED;
 
 	//-------------------------------------------------------------------
-
-	/* get the hardware version from the bootloader firmware to decide which firmware to load */
-	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
-	if (err) {
-		dev_err(&pdev->dev,"Error %x: Failed to get device information from bootloader\n", err);
-		goto lbl_failed;
-	}
 
 	/* upload the device's firmware */
 	err = ixxat_pci_upload_fw(pdev, intf);
@@ -2334,12 +2221,6 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		}
 	}
 
-	err = ixxat_pci_get_intf_info(intf, &intf->dev_info);
-	if (err) {
-		dev_err(&pdev->dev,"Error %x: Failed to get device information from firmware\n", err);
-		goto lbl_failed;
-	}
-
 	err = ixxat_pci_get_firmware_info2(intf, &intf->fw_info);
 	if (err) {
 		dev_info(&pdev->dev,"Error %x: Failed to get firmware information version 2\n", err);
@@ -2350,11 +2231,13 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		}
 	}
 
-	dev_info(&pdev->dev, "Device type     : %.*s\n", (int)(sizeof(intf->dev_info.intf_name)), intf->dev_info.intf_name);
-	dev_info(&pdev->dev, "Device id       : %.*s\n", (int)(sizeof(intf->dev_info.intf_id)), intf->dev_info.intf_id);
-	dev_info(&pdev->dev, "Device version  : 0x%04X\n", intf->dev_info.intf_version);
-	dev_info(&pdev->dev, "FPGA version    : 0x%08X\n", intf->dev_info.intf_fpga_version);
-	dev_info(&pdev->dev, "Firmware version: %d.%d.%d.%d (type: %d)\n", 
+	dev_info(&pdev->dev, "Device type        : %.*s\n", (int)(sizeof(intf->dev_info.intf_name)), intf->dev_info.intf_name);
+	dev_info(&pdev->dev, "Device id          : %.*s\n", (int)(sizeof(intf->dev_info.intf_id)), intf->dev_info.intf_id);
+	dev_info(&pdev->dev, "Device version     : 0x%04X\n", intf->dev_info.intf_version);
+	dev_info(&pdev->dev, "FPGA version       : 0x%08X\n", intf->dev_info.intf_fpga_version);
+	dev_info(&pdev->dev, "Bootmanager version: %d.%d.%d.%d (type: %d)\n", 
+		intf->bm_info.major_version, intf->bm_info.minor_version, intf->bm_info.build_version, intf->bm_info.revision, intf->bm_info.firmware_type);
+	dev_info(&pdev->dev, "Firmware version   : %d.%d.%d.%d (type: %d)\n", 
 		intf->fw_info.major_version, intf->fw_info.minor_version, intf->fw_info.build_version, intf->fw_info.revision, intf->fw_info.firmware_type);
 
 	for (i = 0; i < intf_caps.bus_ctrl_count; i++) {

@@ -88,46 +88,33 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 	u8 opmode = IXXAT_PCI_OPMODE_EXTENDED | IXXAT_PCI_OPMODE_STANDARD;
 	u8 exmode = 0;
 
-	struct ixxat_pci_init_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 res_size = sizeof(cmd->res);
+	struct ixxat_pci_init_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 res_size = sizeof(cmd.res);
 	const u32 req_size = cmd_size - res_size;
 	const u32 req_code = IXXAT_PCI_CMD_INIT_V2;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
-
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-	cmd->req.port = cpu_to_le16(dev->ctrl_idx);
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
+	cmd.req.port = cpu_to_le16(dev->ctrl_idx);
 
 	if (dev->can.ctrlmode & CAN_CTRLMODE_BERR_REPORTING)
 		opmode |= IXXAT_PCI_OPMODE_ERRFRAME;
 	if (dev->can.ctrlmode & CAN_CTRLMODE_LISTENONLY)
 		opmode |= IXXAT_PCI_OPMODE_LISTONLY;
 
-	cmd->mode = opmode;
-	cmd->exmode = exmode;
-	cmd->bt.mode = cpu_to_le32(IXXAT_PCI_BTMODE_NAT);
-	cmd->bt.bps = cpu_to_le32(bt->brp);
-	cmd->bt.ts1 = cpu_to_le16(bt->prop_seg + bt->phase_seg1);
-	cmd->bt.ts2 = cpu_to_le16(bt->phase_seg2);
-	cmd->bt.sjw = cpu_to_le16(bt->sjw);
+	cmd.mode = opmode;
+	cmd.exmode = exmode;
+	cmd.bt.mode = cpu_to_le32(IXXAT_PCI_BTMODE_NAT);
+	cmd.bt.bps = cpu_to_le32(bt->brp);
+	cmd.bt.ts1 = cpu_to_le16(bt->prop_seg + bt->phase_seg1);
+	cmd.bt.ts2 = cpu_to_le16(bt->phase_seg2);
+	cmd.bt.sjw = cpu_to_le16(bt->sjw);
 
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
 	if (err) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree(cmd);
+		dev_err(&intf->pdev->dev, "Error %d: Init ctrl failed\n", err);
 	} else {
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err)
-			dev_err(&intf->pdev->dev, "Error %d: Init ctrl failed\n", err);
-		else
-			err = le32_to_cpu(cmd->res.ret_code);
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
+		err = le32_to_cpu(cmd.res.ret_code);
 	}
 
 	return err;

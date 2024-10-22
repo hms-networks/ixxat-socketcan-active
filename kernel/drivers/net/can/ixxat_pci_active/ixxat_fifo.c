@@ -366,7 +366,7 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 		if (res_size != (le32_to_cpu(res->res_size) + req_size)) {
 			if (err_once) {
 				err_once = 0;
-			// incorrect answer
+				// incorrect answer
 				dev_err(&intf->pdev->dev, "Error: %s: Invalid cmd size %d %d %d", fifo->id, res_size, (u32)(res->res_size + req_size), (u32)(le32_to_cpu(res->res_size) + req_size));
 			}
 
@@ -382,8 +382,7 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 		}
 
 		if (req_port != le16_to_cpu(req->port)) {
-			dev_err(&intf->pdev->dev,
-				"Error: Invalid cmd port index!");
+			dev_err(&intf->pdev->dev, "Error: Invalid cmd port index!");
 			goto cmd_continue;
 		}
 

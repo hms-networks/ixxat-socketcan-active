@@ -121,18 +121,14 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 	u8 opmode = IXXAT_PCI_OPMODE_EXTENDED | IXXAT_PCI_OPMODE_STANDARD;
 	u8 exmode = 0;
 
-	struct ixxat_pci_init_cmd *cmd;
-	const u32 cmd_size = sizeof(*cmd);
-	const u32 res_size = sizeof(cmd->res);
+	struct ixxat_pci_init_cmd cmd;
+	const u32 cmd_size = sizeof(cmd);
+	const u32 res_size = sizeof(cmd.res);
 	const u32 req_size = cmd_size - res_size;
 	const u32 req_code = IXXAT_PCI_CMD_INIT_V2;
 
-	cmd = kmalloc(cmd_size, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
-
-	ixxat_pci_setup_cmd(&cmd->req, req_size, &cmd->res, res_size, req_code);
-	cmd->req.port = cpu_to_le16(dev->ctrl_idx);
+	ixxat_pci_setup_cmd(&cmd.req, req_size, &cmd.res, res_size, req_code);
+	cmd.req.port = cpu_to_le16(dev->ctrl_idx);
 
 	if (dev->can.ctrlmode & CAN_CTRLMODE_3_SAMPLES)
 		btmode = IXXAT_PCI_BTMODE_TSM;
@@ -148,43 +144,31 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 			exmode |= IXXAT_PCI_EXMODE_ISOFD;
 	}
 
-	cmd->mode = opmode;
-	cmd->exmode = exmode;
-	cmd->bt.mode = cpu_to_le32(btmode);
-	cmd->bt.bps = cpu_to_le32(bt->brp);
-	cmd->bt.ts1 = cpu_to_le16(bt->prop_seg + bt->phase_seg1);
-	cmd->bt.ts2 = cpu_to_le16(bt->phase_seg2);
-	cmd->bt.sjw = cpu_to_le16(bt->sjw);
-	cmd->btd.tdo = 0;
+	cmd.mode = opmode;
+	cmd.exmode = exmode;
+	cmd.bt.mode = cpu_to_le32(btmode);
+	cmd.bt.bps = cpu_to_le32(bt->brp);
+	cmd.bt.ts1 = cpu_to_le16(bt->prop_seg + bt->phase_seg1);
+	cmd.bt.ts2 = cpu_to_le16(bt->phase_seg2);
+	cmd.bt.sjw = cpu_to_le16(bt->sjw);
+	cmd.btd.tdo = 0;
 
 	if (exmode) {
-		cmd->btd.mode = cpu_to_le32(btmode);
-		cmd->btd.bps = cpu_to_le32(btd->brp);
-		cmd->btd.ts1 = cpu_to_le16(btd->prop_seg + btd->phase_seg1);
-		cmd->btd.ts2 = cpu_to_le16(btd->phase_seg2);
-		cmd->btd.sjw = cpu_to_le16(btd->sjw);
-		cmd->btd.tdo = cpu_to_le16(btd->brp * (btd->phase_seg1 + 1 +
+		cmd.btd.mode = cpu_to_le32(btmode);
+		cmd.btd.bps = cpu_to_le32(btd->brp);
+		cmd.btd.ts1 = cpu_to_le16(btd->prop_seg + btd->phase_seg1);
+		cmd.btd.ts2 = cpu_to_le16(btd->phase_seg2);
+		cmd.btd.sjw = cpu_to_le16(btd->sjw);
+		cmd.btd.tdo = cpu_to_le16(btd->brp * (btd->phase_seg1 + 1 +
 							btd->prop_seg));
 	}
 
-	err = mutex_lock_interruptible(&intf->cmd_lock);
-
-	if ( err ) {
-		dev_err(&intf->pdev->dev, "Error %x: Mutex lock interrupted", err);
-		kfree (cmd);
+	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);
+	if (err) {
+		dev_err(&intf->pdev->dev, "Error %d: Init ctrl failed\n", err);
 	}
-	else
-	{
-		err = ixxat_pci_handle_cmd(intf, &cmd->req, &cmd->res);
-		if (err) {
-			dev_err(&intf->pdev->dev, "Error %d: Init ctrl failed\n", err);
-		}
-		else {
-			err = le32_to_cpu(cmd->res.ret_code);
-		}
-
-		kfree(cmd);
-		mutex_unlock(&intf->cmd_lock);
+	else {
+		err = le32_to_cpu(cmd.res.ret_code);
 	}
 
 	return err;

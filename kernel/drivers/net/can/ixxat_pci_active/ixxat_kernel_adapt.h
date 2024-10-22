@@ -37,4 +37,10 @@
 	#define netif_napi_add_weight(dev, napi, poll, wait) netif_napi_add(dev, napi, poll, wait)
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
+#ifndef PCI_IRQ_INTX
+	#define PCI_IRQ_INTX PCI_IRQ_LEGACY
+#endif
+#endif
+
 #endif

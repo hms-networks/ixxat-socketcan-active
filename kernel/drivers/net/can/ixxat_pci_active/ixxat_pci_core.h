@@ -176,14 +176,19 @@
 #define IXXAT_PCI_DMA_LEN		(512 * 1024)
 #define IXXAT_PCI_ADDMEM_LEN		PAGE_SIZE
 
-#define IXXAT_PCI_DEFAULT_RESTART_MS	100
-
 #define IX_LOOP_DIS			0x00	//disable self reception
 #define IX_LOOP_SELF_RX			0x01	//enable self reception
 #define IX_LOOPBACK			0x02	//pass on message to application
 
 #define IXXAT_MAX_CANCTRL_COUNT         32
 
+// command used by bootmanager on IB200 < FPGA 1.3 (BM version 3.0.4.0)
+struct ixxat_intf_info_1_3 {
+	char intf_name[IXXAT_PCI_CARDNAME_SIZE];	/* device name */
+	char intf_id[IXXAT_PCI_HWSERIAL_SIZE];		/* unique device id */
+	u16 intf_version;				/* device version ( 0, 1, ...) */
+	u32 intf_fpga_version;				/* device version of FPGA design */
+} __packed;
 
 struct ixxat_intf_info {
 	char intf_name[IXXAT_PCI_CARDNAME_SIZE];	/* device name */
@@ -194,7 +199,8 @@ struct ixxat_intf_info {
 } __packed;
 
 #define IX_FPGAVERSION_MASK		0x00FFFFFF
-#define IX_FPGAVERSION_MAJOR_V2		0x00020000
+#define IX_FPGAVERSION_V1_3		0x00010300
+#define IX_FPGAVERSION_V2		0x00020000
 
 struct ixxat_intf_firmware_info {
 	u32 firmware_type;		/* type of currently running firmware */
@@ -383,6 +389,12 @@ struct ixxat_pci_fwinfo2_cmd {
 	struct ixxat_intf_firmware_info2 info;
 } __packed;
 
+struct ixxat_pci_intf_info_cmd_1_3 {
+	struct ixxat_pci_dal_req req;
+	struct ixxat_pci_dal_res res;
+	struct ixxat_intf_info_1_3 info; /* device capabilities */
+} __packed;
+
 struct ixxat_pci_intf_info_cmd {
 	struct ixxat_pci_dal_req req;
 	struct ixxat_pci_dal_res res;
@@ -441,8 +453,10 @@ struct ixxat_pci_interface {
 	/* Device interrupt line*/
 	unsigned int device_irq;
 
+	/* device, firmware and bootmanager info */
 	struct ixxat_intf_info dev_info;
 	struct ixxat_intf_firmware_info2 fw_info;
+	struct ixxat_intf_firmware_info2 bm_info;
 
 	struct pci_dev *pdev;
 	struct ixxat_pci_device *dev;
@@ -518,7 +532,7 @@ void ixxat_pci_setup_cmd(struct ixxat_pci_dal_req *req, u32 req_size,
 void ixxat_pci_write_altera_mailbox(struct ixxat_pci_interface *intf, u16 off, u32 val);
 u32 ixxat_pci_read_pc_mailbox(struct ixxat_pci_interface *intf, u16 off);
 
-int ixxat_pci_handle_cmd(struct ixxat_pci_interface *intf,
+int ixxat_pci_exec_cmd  (struct ixxat_pci_interface *intf,
 			 struct ixxat_pci_dal_req *req,
 			 struct ixxat_pci_dal_res *res);
 

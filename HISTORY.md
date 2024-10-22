@@ -2,6 +2,16 @@
 
 ## History
 
+### 2.0.574	(2024-10-22)
+
+- introduce ixxat_pci_exec_cmd to encapsulate mutex_lock/unlock on intf->cmd_lock
+- rewrite ixxat_pci_upload_fw to avoid request struct allocations
+- use stack instead of kmalloc/kfree to alloc command structs
+- ouput "FPGA update recommended" for FPGA version < 2.0.0
+- fix command to get FPGA info for IB200 FPGA versions <= 1.3.0 (bootmanager 3.0.4.0)
+- replaced obsolete constant PCI_IRQ_LEGACY by PCI_IRQ_INTX (ICBT-1397)
+- remove assignments to can.restart_ms as this should be done only by the SocketCAN framework and not the individual driver (ICBT-1301)
+
 ### 2.0.556	(2024-07-23)
 
 - add support for current firmware version 3.22.0.1670 same version as current VCI4111 driver rev 182
