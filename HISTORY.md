@@ -2,6 +2,15 @@
 
 ## History
 
+### 2.0.582	(2024-11-14)
+
+- fix echo skb free in start_xmit functions. The bug stopped cyclic transmission after running out of skbs and had been introduced in rev 515.
+- fix ixxat_fifo_read_cmd to correctly increment read counter if command response received
+
+### 2.0.578	(2024-10-24)
+
+- fix copyright years
+
 ### 2.0.574	(2024-10-22)
 
 - introduce ixxat_pci_exec_cmd to encapsulate mutex_lock/unlock on intf->cmd_lock

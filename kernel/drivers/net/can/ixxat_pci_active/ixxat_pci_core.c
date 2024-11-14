@@ -2,7 +2,7 @@
 
 /* CAN driver for IXXAT PCI-to-CAN
  *
- * Copyright (C) 2018 HMS Industrial Networks <socketcan@hms-networks.de>
+ * Copyright (C) 2018-2024 HMS Industrial Networks <socketcan@hms-networks.de>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published
@@ -27,7 +27,7 @@
 MODULE_AUTHOR("HMS Technology Center Ravensburg Gmbh <socketcan@hms-networks.de>");
 MODULE_DESCRIPTION("SocketCAN driver for HMS Ixxat IB2xx, IB4xx, IB6xx, IB810 boards");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0.574-REL");
+MODULE_VERSION("2.0.582-REL");
 
 #define IX_STATISTICS_EXACT 0
 

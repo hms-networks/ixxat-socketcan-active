@@ -2,7 +2,7 @@
 
 /* CAN driver for IXXAT PCI-to-CAN
  *
- * Copyright (C) 2018 HMS Industrial Networks <socketcan@hms-networks.de>
+ * Copyright (C) 2018-2024 HMS Industrial Networks <socketcan@hms-networks.de>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published
@@ -316,6 +316,7 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 	u16 req_port;
 	
 	int err_once = 1;
+	int result = 0;
 
 	// check fifo type
 	if (IX_FIFO_RESDIR(fifo) != IXXAT_PCI_RESDIR_DTOH) {
@@ -341,7 +342,9 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 	start = ktime_get_real();
 	end = start;
 
-	while ((ktime_to_ns(end) - ktime_to_ns(start)) < IXXAT_PCI_CMD_TIMEOUT_NS) {
+	// wait for answer
+	int answer_present = 0;
+ 	while ((ktime_to_ns(end) - ktime_to_ns(start)) < IXXAT_PCI_CMD_TIMEOUT_NS) {
 
 		// sleep for 10 µsec and wait for data from the interface card
 		if (read_index == write_index) {
@@ -356,36 +359,50 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 			if (write_index == num_obj)
 				write_index = 0;
 
-			goto cmd_continue;
+		} else {
+			answer_present= 1;
+			break;
+		}
+		end = ktime_get_real();
+	}
+
+	if (!answer_present) {
+		dev_err(&intf->pdev->dev, "Error: %s: No answer from device", fifo->id);
+		return -ENODATA;
+	}
+
+	src = IX_FIFO_GET_DATAPTR(fifo) + read_index * obj_size;
+	res_size = ioread32(src);
+	src += sizeof(u32);
+	
+	if (res_size != (le32_to_cpu(res->res_size) + req_size)) {
+		if (err_once) {
+			err_once = 0;
+			// incorrect answer
+			dev_err(&intf->pdev->dev, "Error: %s: Invalid cmd size %d %d %d", fifo->id, res_size, (u32)(res->res_size + req_size), (u32)(le32_to_cpu(res->res_size) + req_size));
 		}
 
-		src = IX_FIFO_GET_DATAPTR(fifo) + read_index * obj_size;
-		res_size = ioread32(src);
-		src += sizeof(u32);
-		
-		if (res_size != (le32_to_cpu(res->res_size) + req_size)) {
-			if (err_once) {
-				err_once = 0;
-				// incorrect answer
-				dev_err(&intf->pdev->dev, "Error: %s: Invalid cmd size %d %d %d", fifo->id, res_size, (u32)(res->res_size + req_size), (u32)(le32_to_cpu(res->res_size) + req_size));
-			}
+		result = -ENODATA;
+	}
 
-			goto cmd_continue;
-		}
-
+	if (!result)
+	{
 		req_port = ioread16(src + sizeof(req->size));
 		req_code = ioread32(src + sizeof(req->size)+ sizeof(req->port) + sizeof(req->socket));
 
 		if (req_code != le32_to_cpu(req->code)) {
 			dev_err(&intf->pdev->dev, "Error: %s: Invalid cmd code %d expected: %d", fifo->id, req_code, le32_to_cpu(req->code));
-			goto cmd_continue;
+			result = -ENODATA;
 		}
 
 		if (req_port != le16_to_cpu(req->port)) {
 			dev_err(&intf->pdev->dev, "Error: Invalid cmd port index!");
-			goto cmd_continue;
+			result = -ENODATA;
 		}
+	}
 
+	if (!result)
+	{
 		copy_fromdev(res, src + req_size, le32_to_cpu(res->res_size));
 
 		ix_trace_printk("Req:%x ResSize %i, RetSize %i, Retcode %i \n",
@@ -394,14 +411,11 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 		if (res->ret_code)
 			dev_err(&intf->pdev->dev, "Error %x: Receiving command failure", res->ret_code);
 
-    		// increment read index
-		IX_FIFO_SET_READIDX(fifo, read_index);
-
-		return le32_to_cpu(res->ret_code);
-
-cmd_continue:
-		end = ktime_get_real();
+		result = le32_to_cpu(res->ret_code);
 	}
 
-	return -ENODATA;
+	// increment read index
+	IX_FIFO_SET_READIDX(fifo, read_index);
+
+	return result;
 }

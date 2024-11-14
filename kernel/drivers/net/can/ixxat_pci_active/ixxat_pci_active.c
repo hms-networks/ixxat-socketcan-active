@@ -2,7 +2,7 @@
 
 /* CAN driver for IXXAT PCI-to-CAN
  *
- * Copyright (C) 2018 HMS Industrial Networks <socketcan@hms-networks.de>
+ * Copyright (C) 2018-2024 HMS Industrial Networks <socketcan@hms-networks.de>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published
@@ -196,7 +196,7 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 
 	int i;
 	bool selfReception = false;
-	bool isloopback    = false;
+	bool echoSkb       = false;
 	u32 can_id;
 	u32 can_dlc = 0;
 
@@ -256,32 +256,31 @@ static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, 
 
 	selfReception = ((loopMode & IX_LOOP_SELF_RX) == IX_LOOP_SELF_RX);
 	if (selfReception) {
-
-		can_dlc |= (dev->frn_write << IFI_R0_FRN_SHIFT) & IFI_R0_RD_FRN;
-
-		isloopback = ((loopMode & IX_LOOPBACK) == IX_LOOPBACK);
-		if (isloopback) {
-			spin_lock_irqsave(&dev->rcv_lock, spin_flags);
-
-			// if there is already a echo skb registered -> free it
-			if (dev->can.echo_skb[dev->frn_write - 1])
-				can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
-
-			can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
-
-			dev->frn_write++;
-			if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)
-				dev->frn_write = 1;
-
-			spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
-		}
-		else {
-			dev_kfree_skb(skb);
-		}
-
+		echoSkb = ((loopMode & IX_LOOPBACK) == IX_LOOPBACK);
 	} else {
 		netdev->stats.tx_bytes += cf->can_dlc;
 		netdev->stats.tx_packets += 1;
+	}
+
+	if ( selfReception ) {
+		can_dlc |= (dev->frn_write << IFI_R0_FRN_SHIFT) & IFI_R0_RD_FRN;
+	}
+
+	if ( echoSkb) {
+		spin_lock_irqsave(&dev->rcv_lock, spin_flags);
+		if (dev->can.echo_skb[dev->frn_write - 1])
+			can_free_echo_skb(dev->netdev, dev->frn_write - 1, NULL);
+
+		can_put_echo_skb(skb, dev->netdev, dev->frn_write - 1, 0);
+
+		dev->frn_write++;
+		if (dev->frn_write > IXXAT_PCI_MAX_TX_TRANS)
+			dev->frn_write = 1;
+
+		spin_unlock_irqrestore(&dev->rcv_lock, spin_flags);
+	}
+	else {
+		dev_kfree_skb(skb);
 	}
 
 	iowrite32(can_id , dest + IFIREG_IDENTIFER);
