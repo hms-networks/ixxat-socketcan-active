@@ -27,7 +27,7 @@
 MODULE_AUTHOR("HMS Technology Center Ravensburg Gmbh <socketcan@hms-networks.de>");
 MODULE_DESCRIPTION("SocketCAN driver for HMS Ixxat IB2xx, IB4xx, IB6xx, IB810 boards");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0.582-REL");
+MODULE_VERSION("2.0.587-REL");
 
 #define IX_STATISTICS_EXACT 0
 
@@ -780,7 +780,7 @@ static int ixxat_pci_handle_error(struct ixxat_pci_device *dev,
 	if (dev->can.state == CAN_STATE_BUS_OFF)
 		return 0;
 
-	if (dev->adapter == &can_adapter) {
+	if (IXXAT_PCI_MSG_TYPE_DATA == rx->msgtype) {
 		raw_error = rx->cl1.data[0];
 		dev->bec.rxerr = rx->cl1.data[IXXAT_PCI_CAN_ERROR_COUNTER_RX];
 		dev->bec.txerr = rx->cl1.data[IXXAT_PCI_CAN_ERROR_COUNTER_TX];
@@ -844,10 +844,11 @@ static int ixxat_pci_handle_status(struct ixxat_pci_device *dev,
 	struct sk_buff *skb;
 	enum can_state new_state = CAN_STATE_ERROR_ACTIVE;
 
-	if (dev->adapter == &can_adapter)
+	if (IXXAT_PCI_MSG_TYPE_DATA == rx->msgtype) {
 		raw_status = rx->cl1.data[0];
-	else
+	} else {
 		raw_status = rx->cl2.data[0];
+	}
 
 	if (raw_status != IXXAT_PCI_CAN_STATUS_OK) {
 		if (raw_status & IXXAT_PCI_CAN_STATUS_BUSOFF) {
@@ -930,23 +931,21 @@ static int ixxat_pci_handle_status(struct ixxat_pci_device *dev,
 	return 1;
 }
 
-static int ixxat_pci_handle_vci_msg(struct ixxat_pci_device *dev, void *data)
+static int ixxat_pci_handle_data_msg(struct ixxat_pci_device *dev, struct ixxat_can_msg* data)
 {
-	struct ixxat_can_msg *can_msg = (struct ixxat_can_msg *)data;
-	u32 msg_type = (le32_to_cpu(can_msg->base.flags)
-			& IXXAT_PCI_MSG_FLAGS_TYPE);
+	u32 msg_type = (le32_to_cpu(data->base.flags) & IXXAT_PCI_MSG_FLAGS_TYPE);
 	u32 ret = 0;
 
 	ix_trace_printk (">> ixxat_pci_handle_vci_msg \n");
 
 	switch (msg_type) {
 	case IXXAT_PCI_CAN_STATUS:
-		ret = ixxat_pci_handle_status(dev, can_msg);
+		ret = ixxat_pci_handle_status(dev, data);
 		ix_trace_printk ("-- ixxat_pci_handle_status %i\n", ret);
 		break;
 
 	case IXXAT_PCI_CAN_ERROR:
-		ret = ixxat_pci_handle_error(dev, can_msg);
+		ret = ixxat_pci_handle_error(dev, data);
 		ix_trace_printk ("-- ixxat_pci_handle_error %i\n", ret);
 		break;
 
@@ -972,14 +971,13 @@ static int ixxat_pci_handle_vci_msg(struct ixxat_pci_device *dev, void *data)
 static int ixxat_pci_handle_devmsg(struct ixxat_pci_device *dev)
 {
 	struct ixxat_fifo* fifo = fifo = dev->rx_fifo;
-	void *src;
+	struct ixxat_can_msg* src;
 
 	u32 read_index = IX_FIFO_GET_READIDX(fifo) + 1;
 	u32 write_index = IX_FIFO_GET_WRITEIDX(fifo);
 	u32 num_obj = IX_FIFO_NUMOBJS(fifo);
 	u32 obj_size = IX_FIFO_OBJSIZE(fifo);
 	u32 ret = 0;
-	u32 msg_type;
 
 	ix_trace_printk (">> %i) ixxat_pci_handle_devmsg \n", dev->ctrl_idx);
 
@@ -989,18 +987,16 @@ static int ixxat_pci_handle_devmsg(struct ixxat_pci_device *dev)
 	if (read_index != write_index) {
 
 		src = IX_FIFO_GET_DATAPTR(fifo) + read_index * obj_size;
-		msg_type = *(u32 *)(src);
-		src += sizeof(u32);
 
-		ix_trace_printk ("-- message read %i,write %i, type %i \n", read_index, write_index, msg_type);
+		ix_trace_printk ("-- message read %i,write %i, type %i \n", read_index, write_index, src->msgtype);
 
-		switch (msg_type) {
+		switch (src->msgtype) {
 		case IXXAT_PCI_MSG_TYPE_IFI:
-			ret = dev->adapter->handle_msg(dev, src);
-
+			ret = dev->adapter->handle_msg(dev, &src->base);
 			break;
-		case IXXAT_PCI_MSG_TYPE_VCI:
-			ret = ixxat_pci_handle_vci_msg(dev, src);
+		case IXXAT_PCI_MSG_TYPE_DATA:
+		case IXXAT_PCI_MSG_TYPE_DATA2:
+			ret = ixxat_pci_handle_data_msg(dev, src);
 			break;
 		default:
 			netdev_warn(dev->netdev, "Unknown message received");

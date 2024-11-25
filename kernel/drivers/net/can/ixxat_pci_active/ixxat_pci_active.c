@@ -34,6 +34,25 @@
 #define IFIREG_DATA14 8
 #define IFIREG_TIMESTAMP 40
 
+/// IFI CAN Message overlay structure
+struct ixxat_ifi_rxcan_msg
+{
+  u32 dlc;
+  u32 id;
+  u32 data14;
+  u32 data58;
+  u32 timectrl;
+  u32 intmask;
+  u32 status;
+  u32 version;
+  u32 fifo;
+  u32 timestamp;
+  u32 curtimestamp;
+  u32 para;
+  u32 errordetail;
+  u32 hardreset;
+} __packed;
+
 #define IFI_R0_RD_DLC 0x0000000F
 #define IFI_R0_RD_RTR BIT(4)
 #define IFI_R0_RD_FRN 0xFF000000
@@ -120,10 +139,10 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 	return err;
 }
 
-static int ixxat_pci_handle_sr_canmsg(struct ixxat_pci_device *dev, void *base)
+static int ixxat_pci_handle_sr_canmsg(struct ixxat_pci_device *dev, struct ixxat_ifi_rxcan_msg *msg)
 {
-	u32 reg_dlc = *(u32 *)(base + IFIREG_DLC);
-	u32 tstamp = *(u32 *)(base + IFIREG_TIMESTAMP);
+	u32 reg_dlc = msg->dlc;
+	u32 tstamp = msg->timestamp;
 	u8 frn = (reg_dlc & IFI_R0_RD_FRN) >> IFI_R0_FRN_SHIFT;
 
 	dev->netdev->stats.tx_packets++;
@@ -132,13 +151,13 @@ static int ixxat_pci_handle_sr_canmsg(struct ixxat_pci_device *dev, void *base)
 	return ixxat_pci_handle_frn(dev, frn, tstamp);
 }
 
-static int ixxat_pci_handle_canmsg(struct ixxat_pci_device *dev, void *base)
+static int ixxat_pci_handle_canmsg(struct ixxat_pci_device *dev, struct ixxat_ifi_rxcan_msg *msg)
 {
 	struct can_frame *cf;
 	struct sk_buff *skb = alloc_can_skb(dev->netdev, &cf);
-	u32 raw_id = *(u32 *)(base + IFIREG_IDENTIFER);
-	u32 raw_dlc = *(u32 *)(base + IFIREG_DLC);
-	u32 raw_tstamp = *(u32 *)(base + IFIREG_TIMESTAMP);
+	u32 raw_id = msg->id;
+	u32 raw_dlc = msg->dlc;
+	u32 raw_tstamp = msg->timestamp;
 	u32 *data = (u32 *)cf->data;
 	int i, j;
 
@@ -159,7 +178,7 @@ static int ixxat_pci_handle_canmsg(struct ixxat_pci_device *dev, void *base)
 		cf->can_id |= CAN_RTR_FLAG;
 	else
 		for (i = 0, j = 0; i < cf->can_dlc; ++j, i += sizeof(u32))
-			data[j] = *(u32 *)(base + IFIREG_DATA14 + i);
+			data[j] = *((u32 *)&msg->data14 + i);
 
 	ixxat_pci_get_ts_tv(dev, raw_tstamp, &skb->tstamp);
 
@@ -173,12 +192,14 @@ static int ixxat_pci_handle_canmsg(struct ixxat_pci_device *dev, void *base)
 static int ixxat_pci_handle_ifi_msg(struct ixxat_pci_device *dev, void *base)
 {
 	int ret;
-	u32 raw_dlc = *(u32 *)(base + IFIREG_DLC);
+	struct ixxat_ifi_rxcan_msg* msg = (struct ixxat_ifi_rxcan_msg*)base;
+
+	u32 raw_dlc = msg->dlc;
 
 	if (raw_dlc & IFI_R0_RD_FRN)
-		ret = ixxat_pci_handle_sr_canmsg(dev, base);
+		ret = ixxat_pci_handle_sr_canmsg(dev, msg);
 	else
-		ret = ixxat_pci_handle_canmsg(dev, base);
+		ret = ixxat_pci_handle_canmsg(dev, msg);
 
 	if (ret < 0)
 		netdev_err(dev->netdev, "Error %d: IFI-handling failed\n", ret);
@@ -186,7 +207,7 @@ static int ixxat_pci_handle_ifi_msg(struct ixxat_pci_device *dev, void *base)
 	return ret;
 }
 
-static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, u8	loopMode)
+static int ixxat_pci_start_xmit(struct sk_buff *skb, struct net_device *netdev, u8 loopMode)
 {
 	struct ixxat_pci_device *dev = netdev_priv(netdev);
 	struct can_frame *cf = (struct can_frame *)skb->data;

@@ -2,6 +2,11 @@
 
 ## History
 
+### 2.0.587	(2024-11-25)
+
+- fix correct decoding of CANFD message structs (IXXAT_PCI_MSG_TYPE_DATA/IXXAT_PCI_MSG_TYPE_DATA2) received from device
+  (fixes content of status messages and fixes bus off handling on IB600)
+
 ### 2.0.582	(2024-11-14)
 
 - fix echo skb free in start_xmit functions. The bug stopped cyclic transmission after running out of skbs and had been introduced in rev 515.

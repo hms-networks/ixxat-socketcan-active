@@ -175,10 +175,10 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 }
 
 static int ixxat_pci_handle_sr_canfdmsg(struct ixxat_pci_device *dev,
-					void *base)
+					struct ixxat_ififd_rxcan_msg* msg)
 {
-	u32 raw_dlc = *(u32 *)(base + IXXAT_IFIFD_DLC);
-	u32 tstamp = *(u32 *)(base + IXXAT_IFIFD_RXTIMESTAMP);
+	u32 raw_dlc = msg->dlc;
+	u32 tstamp = msg->time;
 	u8 frn = (raw_dlc & IFIFD_RXFIFO_FRN) >> IFIFD_RXFIFO_FRN_SHIFT;
 
 	dev->netdev->stats.tx_packets++;
@@ -188,13 +188,14 @@ static int ixxat_pci_handle_sr_canfdmsg(struct ixxat_pci_device *dev,
 	return ixxat_pci_handle_frn(dev, frn, tstamp);
 }
 
-static int ixxat_pci_handle_canfdmsg(struct ixxat_pci_device *dev, void *base)
+static int ixxat_pci_handle_canfdmsg(struct ixxat_pci_device *dev, 
+					struct ixxat_ififd_rxcan_msg* msg)
 {
 	struct canfd_frame *cf;
 	struct sk_buff *skb = NULL;
-	u32 raw_id = *(u32 *)(base + IXXAT_IFIFD_ID);
-	u32 raw_dlc = *(u32 *)(base + IXXAT_IFIFD_DLC);
-	u32 raw_tstamp = *(u32 *)(base + IXXAT_IFIFD_RXTIMESTAMP);
+	u32 raw_id = msg->id;
+	u32 raw_dlc = msg->dlc;
+	u32 raw_tstamp = msg->time;
 	u32 *data = NULL;
 	int i, j;
 
@@ -223,7 +224,7 @@ static int ixxat_pci_handle_canfdmsg(struct ixxat_pci_device *dev, void *base)
 	else {
 		data = (u32 *)cf->data;
 		for (i = 0, j = 0; i < cf->len; ++j, i += sizeof(u32))
-			data[j] = *(u32 *)(base + IXXAT_IFIFD_DATA + i);
+			data[j] = *((u32 *)&msg->data[i]);
 	}
 
 	/* Bit Rate Switch */
@@ -246,12 +247,12 @@ static int ixxat_pci_handle_canfdmsg(struct ixxat_pci_device *dev, void *base)
 static int ixxat_pci_handle_ififd_msg(struct ixxat_pci_device *dev, void *base)
 {
 	int ret;
-	u32 raw_dlc = *(u32 *)(base + IXXAT_IFIFD_DLC);
+	struct ixxat_ififd_rxcan_msg* msg = (struct ixxat_ififd_rxcan_msg*)base;
 
-	if (raw_dlc & IFIFD_RXFIFO_FRN)
-		ret = ixxat_pci_handle_sr_canfdmsg(dev, base);
+	if (msg->dlc & IFIFD_RXFIFO_FRN)
+		ret = ixxat_pci_handle_sr_canfdmsg(dev, msg);
 	else
-		ret = ixxat_pci_handle_canfdmsg(dev, base);
+		ret = ixxat_pci_handle_canfdmsg(dev, msg);
 
 	if (ret < 0)
 		netdev_err(dev->netdev, "Error %d: IFI-handling failed\n", ret);

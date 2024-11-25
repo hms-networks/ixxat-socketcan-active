@@ -90,8 +90,9 @@
 #define IXXAT_PCI_EFF_ID		0x1FFC0000
 #define IXXAT_PCI_EFF_SHIFT		18
 
-#define IXXAT_PCI_MSG_TYPE_VCI		0x00
+#define IXXAT_PCI_MSG_TYPE_DATA		0x00
 #define IXXAT_PCI_MSG_TYPE_IFI		0x01
+#define IXXAT_PCI_MSG_TYPE_DATA2	0x02
 #define IXXAT_PCI_MSG_FLAGS_TYPE	0x000000FF
 
 #define IXXAT_PCI_OPMODE_STANDARD	BIT(0)
@@ -275,6 +276,27 @@ struct ixxat_can_msg_cl2 {
 	u8 data[CANFD_MAX_DLEN];
 } __packed;
 
+/// IFI FD CAN Message overlay structure
+struct ixxat_ififd_rxcan_msg
+{
+  u32 fifocmd; 			//e.g. HighPrio
+  u32 stat;			//Self reception TX repetition count statistic
+  u32 time;			//RX timestamp in [us]
+  u32 dlc;
+  u32 id;
+  u8  data[CANFD_MAX_DLEN];
+} __packed;
+
+struct ixxat_ififd_txcan_msg
+{
+  u32 fifocmd; 			//e.g. HighPrio
+  u32 txsuspend;		//TX delay after current message in [us] (write -1 to disable feature)
+  u32 txrepcount;		//TX repetition count in error condition, e.g. ACK ERR, (write -1 to disable feature)
+  u32 dlc;
+  u32 id;
+  u8  data[CANFD_MAX_DLEN];
+} __packed;
+
 /**
  * struct ixxat_can_msg - IXXAT CAN message
  * @base: Base message
@@ -284,6 +306,7 @@ struct ixxat_can_msg_cl2 {
  * Contains an IXXAT CAN message
  */
 struct ixxat_can_msg {
+	u32 msgtype;					// PCI_MSG_TYPE_xxx
 	struct ixxat_can_msg_base base;
 	union {
 		struct ixxat_can_msg_cl1 cl1;
