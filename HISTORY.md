@@ -2,6 +2,11 @@
 
 ## History
 
+### 2.0.615	(2025-08-05)
+
+- Active card driver: use dma_set_mask_and_coherent to set DMA mask to 64Bit (previous version did not run on RPI5 with 64Bit Linux kernel)
+- remove MODULE_VERSION, fix MODULE_AUTHOR
+
 ### 2.0.587	(2024-11-25)
 
 - fix correct decoding of CANFD message structs (IXXAT_PCI_MSG_TYPE_DATA/IXXAT_PCI_MSG_TYPE_DATA2) received from device

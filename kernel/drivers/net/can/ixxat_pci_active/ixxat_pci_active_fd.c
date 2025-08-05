@@ -394,7 +394,6 @@ struct ixxat_pci_adapter can_fd_adapter = {
 	.bt = &pci2canfd_bt,
 	.btd = &pci2canfd_btd,
 	.modes = IXXAT_PCI_FD_MODES,
-	.sizeof_dev_private = sizeof(struct ixxat_pci_device),
 
 	.dev_init_ctrl = ixxat_pci_init_ctrl,
 	.dev_start_xmit = ixxat_pci_start_xmit_fd,

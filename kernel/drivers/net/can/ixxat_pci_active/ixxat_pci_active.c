@@ -331,7 +331,6 @@ struct ixxat_pci_adapter can_adapter = {
 	.clock = IXXAT_PCI_CLOCK,
 	.bt = &pci2can_bt,
 	.modes = IXXAT_PCI_MODES,
-	.sizeof_dev_private = sizeof(struct ixxat_pci_device),
 
 	.dev_init_ctrl = ixxat_pci_init_ctrl,
 	.dev_start_xmit = ixxat_pci_start_xmit,

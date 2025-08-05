@@ -503,14 +503,11 @@ struct ixxat_pci_adapter {
 	const char *name;
 	const struct can_bittiming_const *bt;
 	const struct can_bittiming_const *btd;
-	unsigned int ctrl_count;
 	const u32 modes;
 
 	int (*dev_start_xmit)(struct sk_buff *skb, struct net_device *netdev, u8 loopMode);
 	int (*dev_init_ctrl)(struct ixxat_pci_device *dev);
 	int (*handle_msg)(struct ixxat_pci_device *dev, void *ifi_base);
-
-	int sizeof_dev_private;
 };
 
 struct ixxat_pci_device {

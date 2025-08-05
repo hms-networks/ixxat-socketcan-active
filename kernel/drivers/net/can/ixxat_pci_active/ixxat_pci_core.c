@@ -24,10 +24,9 @@
 
 #include "ixxat_kernel_adapt.h"
 
-MODULE_AUTHOR("HMS Technology Center Ravensburg Gmbh <socketcan@hms-networks.de>");
+MODULE_AUTHOR("HMS Technology Center GmbH <socketcan@hms-networks.de>");
 MODULE_DESCRIPTION("SocketCAN driver for HMS Ixxat IB2xx, IB4xx, IB6xx, IB810 boards");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0.587-REL");
 
 #define IX_STATISTICS_EXACT 0
 
@@ -290,6 +289,7 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 				  struct ixxat_pci_interface *intf)
 {
 	int err = -ENOMEM;
+	int ret;
 
 	ix_trace_printk (">> ixxat_pci_register_dev \n");
 
@@ -318,6 +318,12 @@ static int ixxat_pci_register_dev(struct pci_dev *pdev,
 
 	intf->addmemlen = IXXAT_PCI_ADDMEM_LEN;
 	intf->dmalen = IXXAT_PCI_DMA_LEN;
+
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_err(&pdev->dev, "Error: Failed to set DMA mask: %d", ret);
+		goto release_dma;
+	}
 
 	intf->dmavadd = dma_alloc_coherent( &pdev->dev, intf->dmalen, &intf->dmaadd, GFP_KERNEL|GFP_DMA);
 
@@ -2209,13 +2215,6 @@ static int ixxat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	state = IXXAT_PROBESTATE_FW_CONNECTION_ESTABLISHED;
 	//-------------------------------------------------------------------
-
-	adapter->ctrl_count = 0;
-	for (i = 0; i < intf_caps.bus_ctrl_count; i++) {
-		if (IXXAT_PCI_BUS_TYPE(intf_caps.bus_ctrl_types[i]) == IXXAT_PCI_BUS_CAN) {
-			adapter->ctrl_count++;
-		}
-	}
 
 	err = ixxat_pci_get_firmware_info2(intf, &intf->fw_info);
 	if (err) {
