@@ -2,6 +2,19 @@
 
 ## History
 
+### 2.0.674	(2026-09-10)
+
+- remove references to strncpy which has been removed from kernel 7.2
+
+### 2.0.667	(2026-05-21)
+
+- fix warning: ISO C90 forbids mixed declarations and code
+
+### 2.0.655	(2026-04-24)
+
+- do not use <eth_dev_ops>.ndo_change_mtu for kernel versions >= 6.19 (has been removed)
+- fix build on kernel 6.17.0-20
+
 ### 2.0.615	(2025-08-05)
 
 - Active card driver: use dma_set_mask_and_coherent to set DMA mask to 64Bit (previous version did not run on RPI5 with 64Bit Linux kernel)

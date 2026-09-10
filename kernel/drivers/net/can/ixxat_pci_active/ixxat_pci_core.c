@@ -85,15 +85,15 @@ static int showdump(void* pbdata, int length)
 
 void ixxat_pci_write_altera_mailbox(struct ixxat_pci_interface *intf, u16 off, u32 val)
 {
-	WARN_ON(off >= IXXAT_PCI_ALTERA_P2A_MBX_COUNT);
 	void __iomem *mbx = intf->reg1vadd + IXXAT_PCI_ALTERA_P2A_MBX_OFF;
+	WARN_ON(off >= IXXAT_PCI_ALTERA_P2A_MBX_COUNT);
 	iowrite32( val, mbx + off * sizeof(u32));
 }
 
 u32 ixxat_pci_read_pc_mailbox(struct ixxat_pci_interface *intf, u16 off)
 {
-	WARN_ON(off >= IXXAT_PCI_ALTERA_A2P_MBX_COUNT);
 	void __iomem *mbx = intf->reg1vadd + IXXAT_PCI_ALTERA_A2P_MBX_OFF;
+	WARN_ON(off >= IXXAT_PCI_ALTERA_A2P_MBX_COUNT);
 	return ioread32(mbx + off * sizeof(u32));
 }
 
@@ -1136,7 +1136,7 @@ static int ixxat_pci_get_intf_info_1_3(struct ixxat_pci_interface *intf,
 		{
 			memset(dev_info, 0, sizeof(*dev_info));
 			memcpy(dev_info->intf_name, &cmd.info.intf_name, sizeof(dev_info->intf_name));
-			strncpy(dev_info->intf_id, cmd.info.intf_id, sizeof(dev_info->intf_id));
+			memcpy(dev_info->intf_id, cmd.info.intf_id, sizeof(dev_info->intf_id));
 			dev_info->intf_version = cmd.info.intf_version;
 			dev_info->intf_fpga_version = cmd.info.intf_fpga_version;
 			dev_info->reserved = 0;
@@ -1166,7 +1166,7 @@ static int ixxat_pci_get_intf_info(struct ixxat_pci_interface *intf,
 		if (dev_info) {
 			memset(dev_info, 0, sizeof(*dev_info));
 			memcpy(dev_info->intf_name, &cmd.info.intf_name, sizeof(dev_info->intf_name));
-			strncpy(dev_info->intf_id, cmd.info.intf_id, sizeof(dev_info->intf_id));
+			memcpy(dev_info->intf_id, cmd.info.intf_id, sizeof(dev_info->intf_id));
 			dev_info->intf_version = cmd.info.intf_version;
 			dev_info->intf_fpga_version = cmd.info.intf_fpga_version;
 			dev_info->reserved = 0;
@@ -1727,7 +1727,9 @@ static const struct net_device_ops ixxat_pci_netdev_ops = {
 	.ndo_open = ixxat_pci_open,
 	.ndo_stop = ixxat_pci_stop,
 	.ndo_start_xmit = ixxat_pci_start_xmit,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 19, 0) 	
 	.ndo_change_mtu = can_change_mtu,
+#endif	
 };
 
 static struct ixxat_pci_adapter *ixxat_pci_get_adapter(const u16 id)
@@ -1863,7 +1865,11 @@ static int ixxat_pci_create_dev(struct ixxat_pci_interface *intf,
 
 	dev->can.clock.freq = adapter->clock;
 	dev->can.bittiming_const = adapter->bt;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 16, 0)
 	dev->can.data_bittiming_const = adapter->btd;
+#else
+	dev->can.fd.data_bittiming_const = adapter->btd;
+#endif
 
 	dev->can.do_set_mode = ixxat_pci_set_mode;
 	dev->can.do_get_berr_counter = ixxat_pci_get_berr_counter;
@@ -1938,9 +1944,9 @@ free_candev:
 
 static int ixxat_dev_uninit(struct pci_dev *pdev, struct ixxat_pci_interface *intf, int state)
 {
+	int err;
 	dev_info(&pdev->dev, "ixxat_dev_uninit state: %i\n", state);
 
-	int err;
 	if (state >= IXXAT_PROBESTATE_INITIALIZED) {
 	}
 

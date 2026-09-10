@@ -113,7 +113,11 @@ static const struct can_bittiming_const pci2canfd_btd = {
 static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 {
 	const struct can_bittiming *bt = &dev->can.bittiming;
-	const struct can_bittiming *btd = &dev->can.data_bittiming;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 16, 0)
+	const struct can_bittiming *dbt = &dev->can.data_bittiming;
+#else
+	const struct can_bittiming *dbt = &dev->can.fd.data_bittiming;
+#endif
 	struct ixxat_pci_interface *intf = dev->intf;
 
 	int err;
@@ -155,12 +159,12 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 
 	if (exmode) {
 		cmd.btd.mode = cpu_to_le32(btmode);
-		cmd.btd.bps = cpu_to_le32(btd->brp);
-		cmd.btd.ts1 = cpu_to_le16(btd->prop_seg + btd->phase_seg1);
-		cmd.btd.ts2 = cpu_to_le16(btd->phase_seg2);
-		cmd.btd.sjw = cpu_to_le16(btd->sjw);
-		cmd.btd.tdo = cpu_to_le16(btd->brp * (btd->phase_seg1 + 1 +
-							btd->prop_seg));
+		cmd.btd.bps = cpu_to_le32(dbt->brp);
+		cmd.btd.ts1 = cpu_to_le16(dbt->prop_seg + dbt->phase_seg1);
+		cmd.btd.ts2 = cpu_to_le16(dbt->phase_seg2);
+		cmd.btd.sjw = cpu_to_le16(dbt->sjw);
+		cmd.btd.tdo = cpu_to_le16(dbt->brp * (dbt->phase_seg1 + 1 +
+							dbt->prop_seg));
 	}
 
 	err = ixxat_pci_exec_cmd(intf, &cmd.req, &cmd.res);

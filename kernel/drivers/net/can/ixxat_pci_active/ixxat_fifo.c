@@ -191,10 +191,16 @@ static void fifo2_set_readidx(struct ixxat_fifo* fifo, u32 idx)
 
 void ixxat_fifo_init(struct ixxat_fifo* fifo, void* __iomem base, const char* prefix, int index)
 {
+	int ntocopy;
+	int destlen = sizeof(fifo->id);
+
+	memset(fifo->id, destlen, 0);
+
 	if (index < 0) {
-		strncpy(fifo->id, prefix, 20);
+		ntocopy = strnlen(prefix, destlen);
+		memcpy(fifo->id, prefix, ntocopy);
 	} else {
-		snprintf(fifo->id, sizeof(fifo->id), "%.20s[%i]", prefix, index);
+		snprintf(fifo->id, destlen, "%.20s[%i]", prefix, index);
 	}
 
 	fifo->base = base;
@@ -314,7 +320,9 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 	u32 res_size;
 	u32 req_code;
 	u16 req_port;
-	
+
+	int answer_present;
+
 	int err_once = 1;
 	int result = 0;
 
@@ -343,7 +351,7 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 	end = start;
 
 	// wait for answer
-	int answer_present = 0;
+	answer_present = 0;
  	while ((ktime_to_ns(end) - ktime_to_ns(start)) < IXXAT_PCI_CMD_TIMEOUT_NS) {
 
 		// sleep for 10 µsec and wait for data from the interface card
@@ -374,7 +382,7 @@ int ixxat_fifo_read_cmd(struct ixxat_pci_interface *intf,
 	src = IX_FIFO_GET_DATAPTR(fifo) + read_index * obj_size;
 	res_size = ioread32(src);
 	src += sizeof(u32);
-	
+
 	if (res_size != (le32_to_cpu(res->res_size) + req_size)) {
 		if (err_once) {
 			err_once = 0;
