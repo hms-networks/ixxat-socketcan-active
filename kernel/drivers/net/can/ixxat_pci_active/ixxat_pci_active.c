@@ -142,7 +142,7 @@ static int ixxat_pci_init_ctrl(struct ixxat_pci_device *dev)
 static int ixxat_pci_handle_sr_canmsg(struct ixxat_pci_device *dev, struct ixxat_ifi_rxcan_msg *msg)
 {
 	u32 reg_dlc = msg->dlc;
-	u32 tstamp = msg->timestamp;
+	u32 tstamp = msg->curtimestamp;
 	u8 frn = (reg_dlc & IFI_R0_RD_FRN) >> IFI_R0_FRN_SHIFT;
 
 	dev->netdev->stats.tx_packets++;
@@ -157,7 +157,7 @@ static int ixxat_pci_handle_canmsg(struct ixxat_pci_device *dev, struct ixxat_if
 	struct sk_buff *skb = alloc_can_skb(dev->netdev, &cf);
 	u32 raw_id = msg->id;
 	u32 raw_dlc = msg->dlc;
-	u32 raw_tstamp = msg->timestamp;
+	u32 raw_tstamp = msg->curtimestamp;
 	u32 *data = (u32 *)cf->data;
 	int i, j;
 
