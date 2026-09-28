@@ -2,6 +2,12 @@
 
 ## History
 
+### 2.1.1	(2026-09-28)
+
+- IFI CAN based devices: fix access to wrong timestamp field introduced in v2.0.587
+- add usage chapter to README.md
+- add deployment specific files
+
 ### 2.0.674	(2026-09-10)
 
 - remove references to strncpy which has been removed from kernel 7.2
